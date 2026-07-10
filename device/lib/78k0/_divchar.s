@@ -35,252 +35,117 @@
 
 	.area CODE
 
+	; Selector bits 0/1 mark signed operands; bit 2 requests the remainder.
 __divschar:
 	mov	c,a
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,#0x00
-	mov	b,a
-
-	mov	a,c
-	cmp	a,#0x80
-	bc	00001$
-	mov	c,a
-	mov	a,b
-	xor	a,#0x01
-	mov	b,a
-	mov	a,c
-	xor	a,#0xff
-	add	a,#0x01
-00001$:
-	mov	x,a
-
-	mov	a,[hl+0x02]
-	cmp	a,#0x80
-	bc	00002$
-	mov	c,a
-	mov	a,b
-	xor	a,#0x01
-	mov	b,a
-	mov	a,c
-	xor	a,#0xff
-	add	a,#0x01
-00002$:
-	mov	c,a
-	mov	a,#0x00
-	divuw	c
-
-	mov	c,a
-	mov	a,b
-	cmp	a,#0x00
-	bz	00003$
-	mov	a,#0x00
-	sub	a,x
-	mov	x,a
-	mov	a,#0x00
-	subc	a,c
-	br	!__divchar_cleanup
-
-00003$:
-	mov	a,c
-	br	!__divchar_cleanup
+	push	de
+	mov	a,#0x03
+	br	!__divchar_common
 
 __divsuchar:
 	mov	c,a
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,#0x00
-	mov	b,a
-
-	mov	a,c
-	cmp	a,#0x80
-	bc	00011$
+	push	de
 	mov	a,#0x01
-	mov	b,a
-	mov	a,c
-	xor	a,#0xff
-	add	a,#0x01
-00011$:
-	mov	x,a
-
-	mov	a,[hl+0x02]
-	mov	c,a
-	mov	a,#0x00
-	divuw	c
-
-	mov	c,a
-	mov	a,b
-	cmp	a,#0x00
-	bz	00012$
-	mov	a,#0x00
-	sub	a,x
-	mov	x,a
-	mov	a,#0x00
-	subc	a,c
-	br	!__divchar_cleanup
-
-00012$:
-	mov	a,c
-	br	!__divchar_cleanup
+	br	!__divchar_common
 
 __divuschar:
 	mov	c,a
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,#0x00
-	mov	b,a
-
-	mov	a,c
-	mov	x,a
-
-	mov	a,[hl+0x02]
-	cmp	a,#0x80
-	bc	00021$
-	mov	a,#0x01
-	mov	b,a
-	mov	a,[hl+0x02]
-	xor	a,#0xff
-	add	a,#0x01
-00021$:
-	mov	c,a
-	mov	a,#0x00
-	divuw	c
-
-	mov	c,a
-	mov	a,b
-	cmp	a,#0x00
-	bz	00022$
-	mov	a,#0x00
-	sub	a,x
-	mov	x,a
-	mov	a,#0x00
-	subc	a,c
-	br	!__divchar_cleanup
-
-00022$:
-	mov	a,c
-	br	!__divchar_cleanup
+	push	de
+	mov	a,#0x02
+	br	!__divchar_common
 
 __modschar:
 	mov	c,a
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,#0x00
-	mov	b,a
-
-	mov	a,c
-	cmp	a,#0x80
-	bc	00031$
-	mov	a,#0x01
-	mov	b,a
-	mov	a,c
-	xor	a,#0xff
-	add	a,#0x01
-00031$:
-	mov	x,a
-
-	mov	a,[hl+0x02]
-	cmp	a,#0x80
-	bc	00032$
-	xor	a,#0xff
-	add	a,#0x01
-00032$:
-	mov	c,a
-	mov	a,#0x00
-	divuw	c
-
-	mov	a,c
-	mov	x,a
-	mov	a,#0x00
-	mov	c,a
-	mov	a,b
-	cmp	a,#0x00
-	bz	00033$
-	mov	a,#0x00
-	sub	a,x
-	mov	x,a
-	mov	a,#0x00
-	subc	a,c
-	br	!__divchar_cleanup
-
-00033$:
-	mov	a,c
-	br	!__divchar_cleanup
+	push	de
+	mov	a,#0x07
+	br	!__divchar_common
 
 __modsuchar:
 	mov	c,a
+	push	de
+	mov	a,#0x05
+	br	!__divchar_common
+
+__moduschar:
+	mov	c,a
+	push	de
+	mov	a,#0x06
+
+__divchar_common:
+	mov	e,a
 	movw	ax,sp
 	movw	hl,ax
-	mov	a,#0x00
+	mov	a,[hl+0x04]
 	mov	b,a
+	mov	a,#0x00
+	mov	d,a
 
+	mov	a,e
+	and	a,#0x01
+	bz	00001$
 	mov	a,c
 	cmp	a,#0x80
-	bc	00041$
+	bc	00001$
+	mov	a,#0x00
+	sub	a,c
+	mov	c,a
 	mov	a,#0x01
-	mov	b,a
-	mov	a,c
-	xor	a,#0xff
-	add	a,#0x01
-00041$:
-	mov	x,a
+	mov	d,a
 
-	mov	a,[hl+0x02]
+00001$:
+	mov	a,e
+	and	a,#0x02
+	bz	00003$
+	mov	a,b
+	cmp	a,#0x80
+	bc	00003$
+	mov	a,#0x00
+	sub	a,b
+	mov	b,a
+	mov	a,e
+	and	a,#0x04
+	bnz	00003$
+	mov	a,d
+	xor	a,#0x01
+	mov	d,a
+
+00003$:
+	mov	a,c
+	mov	x,a
+	mov	a,b
 	mov	c,a
 	mov	a,#0x00
 	divuw	c
 
+	mov	a,e
+	and	a,#0x04
+	bz	00004$
 	mov	a,c
 	mov	x,a
-	mov	a,#0x00
-	mov	c,a
-	mov	a,b
+
+00004$:
+	mov	a,d
 	cmp	a,#0x00
-	bz	00042$
+	bz	00005$
 	mov	a,#0x00
 	sub	a,x
 	mov	x,a
 	mov	a,#0x00
-	subc	a,c
-	br	!__divchar_cleanup
+	subc	a,#0x00
+	br	!00006$
 
-00042$:
-	mov	a,c
-	br	!__divchar_cleanup
-
-__moduschar:
-	mov	c,a
-	movw	ax,sp
-	movw	hl,ax
-
-	mov	a,c
-	mov	x,a
-
-	mov	a,[hl+0x02]
-	cmp	a,#0x80
-	bc	00051$
-	xor	a,#0xff
-	add	a,#0x01
-00051$:
-	mov	c,a
+00005$:
 	mov	a,#0x00
-	divuw	c
 
-	mov	a,c
-	mov	x,a
-	mov	a,#0x00
-	br	!__divchar_cleanup
+00006$:
+	pop	de
 
 __divchar_cleanup:
 	movw	bc,ax
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,[hl+0x01]
-	mov	[hl+0x02],a
-	mov	a,[hl+0x00]
-	mov	[hl+0x01],a
+	pop	hl
 	movw	ax,sp
 	addw	ax,#0x0001
 	movw	sp,ax
+	push	hl
 	movw	ax,bc
 	ret

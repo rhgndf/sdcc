@@ -31,73 +31,49 @@
 	.area CODE
 
 __mulint:
-	mov	b,a
-	mov	a,x
-	mov	c,a
-	movw	ax,de
-	push	ax
+	movw	bc,ax
+	push	de
 	movw	ax,sp
-	subw	ax,#0x0004
-	movw	sp,ax
 	movw	hl,ax
-	mov	a,c
-	mov	[hl+0x00],a
-	mov	a,b
-	mov	[hl+0x01],a
-	mov	a,[hl+0x08]
-	mov	[hl+0x02],a
-	mov	a,[hl+0x09]
-	mov	[hl+0x03],a
-
-	mov	a,[hl+0x02]
-	mov	x,a
-	mov	a,[hl+0x00]
-	mulu	x
-	mov	b,a
-	xch	a,x
-	mov	c,a
-
-	mov	a,[hl+0x03]
-	mov	x,a
-	mov	a,[hl+0x00]
-	mulu	x
-	xch	a,x
-	add	a,b
-	mov	b,a
-
-	mov	a,[hl+0x02]
-	mov	x,a
-	mov	a,[hl+0x01]
-	mulu	x
-	xch	a,x
-	add	a,b
-	mov	b,a
-
-	mov	a,c
-	mov	x,a
-	mov	a,b
-	mov	[hl+0x01],a
-	mov	a,x
-	mov	[hl+0x00],a
-
 	mov	a,[hl+0x04]
 	mov	x,a
 	mov	a,[hl+0x05]
 	movw	de,ax
 
-	mov	a,[hl+0x07]
-	mov	c,a
-	mov	a,c
-	mov	[hl+0x09],a
-	mov	a,[hl+0x06]
-	mov	c,a
-	mov	a,c
-	mov	[hl+0x08],a
-
-	movw	ax,sp
-	addw	ax,#0x0008
-	movw	sp,ax
-	mov	a,[hl+0x00]
+	; Only the low product and two cross-product bytes affect a 16-bit result.
+	mov	a,e
 	mov	x,a
-	mov	a,[hl+0x01]
+	mov	a,c
+	mulu	x
+	mov	h,a
+	mov	a,x
+	mov	l,a
+
+	mov	a,d
+	mov	x,a
+	mov	a,c
+	mulu	x
+	mov	a,x
+	add	a,h
+	mov	h,a
+
+	mov	a,e
+	mov	x,a
+	mov	a,b
+	mulu	x
+	mov	a,x
+	add	a,h
+	mov	h,a
+
+	mov	a,l
+	mov	x,a
+	mov	a,h
+	pop	de
+	movw	bc,ax
+	pop	hl
+	movw	ax,sp
+	addw	ax,#0x0002
+	movw	sp,ax
+	push	hl
+	movw	ax,bc
 	ret

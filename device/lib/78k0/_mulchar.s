@@ -33,153 +33,73 @@
 
 	.area CODE
 
+	; Selector bit 0 marks the first operand signed; bit 1 marks the second.
 __muluchar:
 	mov	c,a
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,[hl+0x02]
-	mov	x,a
-	mov	a,c
-	mulu	x
-	br	!__mulchar_cleanup
+	push	de
+	mov	a,#0x00
+	br	!__mulchar_common
 
 __mulschar:
 	mov	c,a
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,#0x00
-	mov	b,a
-
-	mov	a,c
-	cmp	a,#0x80
-	bc	00001$
-	mov	c,a
-	mov	a,b
-	xor	a,#0x01
-	mov	b,a
-	mov	a,c
-	xor	a,#0xff
-	add	a,#0x01
-00001$:
-	mov	c,a
-
-	mov	a,[hl+0x02]
-	cmp	a,#0x80
-	bc	00002$
-	mov	x,a
-	mov	a,b
-	xor	a,#0x01
-	mov	b,a
-	mov	a,x
-	xor	a,#0xff
-	add	a,#0x01
-00002$:
-	mov	x,a
-	mov	a,c
-	mulu	x
-
-	mov	c,a
-	mov	a,b
-	cmp	a,#0x00
-	mov	a,c
-	bz	00003$
-	mov	c,a
-	mov	a,#0x00
-	sub	a,x
-	mov	x,a
-	mov	a,#0x00
-	subc	a,c
-	br	!__mulchar_cleanup
-
-00003$:
-	br	!__mulchar_cleanup
+	push	de
+	mov	a,#0x03
+	br	!__mulchar_common
 
 __mulsuchar:
 	mov	c,a
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,#0x00
-	mov	b,a
-
-	mov	a,c
-	cmp	a,#0x80
-	bc	00011$
+	push	de
 	mov	a,#0x01
-	mov	b,a
-	mov	a,c
-	xor	a,#0xff
-	add	a,#0x01
-00011$:
-	mov	c,a
-
-	mov	a,[hl+0x02]
-	mov	x,a
-	mov	a,c
-	mulu	x
-
-	mov	c,a
-	mov	a,b
-	cmp	a,#0x00
-	mov	a,c
-	bz	00012$
-	mov	c,a
-	mov	a,#0x00
-	sub	a,x
-	mov	x,a
-	mov	a,#0x00
-	subc	a,c
-	br	!__mulchar_cleanup
-
-00012$:
-	br	!__mulchar_cleanup
+	br	!__mulchar_common
 
 __muluschar:
 	mov	c,a
+	push	de
+	mov	a,#0x02
+
+__mulchar_common:
+	mov	e,a
 	movw	ax,sp
 	movw	hl,ax
-	mov	a,#0x00
+	mov	a,[hl+0x04]
 	mov	b,a
-
-	mov	a,[hl+0x02]
-	cmp	a,#0x80
-	bc	00021$
-	mov	a,#0x01
-	mov	b,a
-	mov	a,[hl+0x02]
-	xor	a,#0xff
-	add	a,#0x01
-00021$:
 	mov	x,a
-
 	mov	a,c
 	mulu	x
+	mov	d,a
 
-	mov	c,a
-	mov	a,b
-	cmp	a,#0x00
+	; Correct the high product byte for each sign-extended operand.
+	mov	a,e
+	and	a,#0x01
+	bz	00001$
 	mov	a,c
-	bz	00022$
-	mov	c,a
-	mov	a,#0x00
-	sub	a,x
-	mov	x,a
-	mov	a,#0x00
-	subc	a,c
-	br	!__mulchar_cleanup
+	cmp	a,#0x80
+	bc	00001$
+	mov	a,d
+	sub	a,b
+	mov	d,a
 
-00022$:
-	br	!__mulchar_cleanup
+00001$:
+	mov	a,e
+	and	a,#0x02
+	bz	00002$
+	mov	a,b
+	cmp	a,#0x80
+	bc	00002$
+	mov	a,d
+	sub	a,c
+	mov	d,a
+
+00002$:
+	mov	a,d
+	pop	de
 
 __mulchar_cleanup:
 	movw	bc,ax
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,[hl+0x01]
-	mov	[hl+0x02],a
-	mov	a,[hl+0x00]
-	mov	[hl+0x01],a
+	pop	hl
 	movw	ax,sp
 	addw	ax,#0x0001
 	movw	sp,ax
+	push	hl
 	movw	ax,bc
 	ret

@@ -672,21 +672,13 @@ functionFirstRegArgSize (sym_link *ftype)
 static void
 moveReturnAddressForCalleeCleanup (const int cleanup_bytes)
 {
-  setHLToSP ();
-  emit2 ("mov", "a,[hl+0x01]");
-  emit2 ("mov", "c,a");
-  setHLToStackOffset (cleanup_bytes + 1);
-  emit2 ("mov", "a,c");
-  emit2 ("mov", "[hl+0x00],a");
-
-  setHLToSP ();
-  emit2 ("mov", "a,[hl+0x00]");
-  emit2 ("mov", "c,a");
-  setHLToStackOffset (cleanup_bytes);
-  emit2 ("mov", "a,c");
-  emit2 ("mov", "[hl+0x00],a");
-
-  adjustFramePointer (cleanup_bytes, false);
+  clearAResult ();
+  clearHLState ();
+  emit2 ("pop", "hl");
+  emit2 ("movw", "ax,sp");
+  emit2 ("addw", "ax,#0x%04x", (unsigned)cleanup_bytes);
+  emit2 ("movw", "sp,ax");
+  emit2 ("push", "hl");
 }
 
 void
@@ -699,11 +691,12 @@ static void
 genFunction (const iCode *ic)
 {
   const symbol *sym = OP_SYMBOL (IC_LEFT (ic));
+  const int frame_local_size = sym->stack > 0 ? sym->stack : 0;
 
   clearAResult ();
   clearHLState ();
   stack_pushed = 0;
-  local_stack_size = (sym->stack > 0 ? sym->stack : 0) + K78K0_PRESERVED_DE_BYTES;
+  local_stack_size = frame_local_size + K78K0_PRESERVED_DE_BYTES;
   current_return_size = sym->type && sym->type->next && !IS_VOID (sym->type->next) ?
     getSize (sym->type->next) : 0;
   current_return_is_struct = typeReturnsStruct (sym->type);
@@ -731,23 +724,46 @@ genFunction (const iCode *ic)
   {
     const int first_regarg_size = functionFirstRegArgSize (sym->type);
 
-    saveScalarReturnForEpilogue (first_regarg_size);
+    if (first_regarg_size == 1)
+      emit2 ("mov", "c,a");
+    else if (first_regarg_size == 2)
+      emit2 ("movw", "bc,ax");
+    else
+      saveScalarReturnForEpilogue (first_regarg_size);
 
-    adjustFramePointer (-local_stack_size, true);
+    adjustFramePointer (-frame_local_size, false);
 
-    emit2 ("movw", "ax,de");
-    emit2 ("mov", "[hl+0x01],a");
-    emit2 ("mov", "a,x");
-    emit2 ("mov", "[hl+0x00],a");
+    emit2 ("push", "de");
+    if (first_regarg_size)
+      setHLToSP ();
+    else
+      clearHLState ();
 
-    restoreScalarReturnForEpilogue (first_regarg_size);
+    if (first_regarg_size == 1)
+      emit2 ("mov", "a,c");
+    else if (first_regarg_size == 2)
+      emit2 ("movw", "ax,bc");
+    else
+      restoreScalarReturnForEpilogue (first_regarg_size);
 
     if (IFFUNC_ISCRITICAL (sym->type))
       {
-        saveScalarReturnForEpilogue (first_regarg_size);
+        if (first_regarg_size == 1)
+          emit2 ("mov", "c,a");
+        else if (first_regarg_size == 2)
+          emit2 ("movw", "bc,ax");
+        else
+          saveScalarReturnForEpilogue (first_regarg_size);
+
         genCritical ();
         setHLToSP ();
-        restoreScalarReturnForEpilogue (first_regarg_size);
+
+        if (first_regarg_size == 1)
+          emit2 ("mov", "a,c");
+        else if (first_regarg_size == 2)
+          emit2 ("movw", "ax,bc");
+        else
+          restoreScalarReturnForEpilogue (first_regarg_size);
       }
   }
 }
@@ -756,6 +772,7 @@ static void
 genEndFunction (const iCode *ic)
 {
   const symbol *sym = OP_SYMBOL (IC_LEFT (ic));
+  int frame_local_size;
 
   if (IFFUNC_ISNAKED (sym->type))
     {
@@ -772,42 +789,67 @@ genEndFunction (const iCode *ic)
     }
 
   if (IFFUNC_ISCRITICAL (sym->type))
+    genEndCritical ();
+
+  frame_local_size = local_stack_size - K78K0_PRESERVED_DE_BYTES;
+  wassertl (frame_local_size >= 0, "78K0 invalid local frame size.");
+
+  if (frame_local_size)
     {
       if (!current_return_is_struct && current_return_size > 0 && current_return_size <= K78K0_MAX_SCALAR_BYTES)
-        saveScalarReturnForEpilogue (current_return_size);
+        {
+          if (current_return_size == 1)
+            emit2 ("mov", "c,a");
+          else if (current_return_size == 2)
+            emit2 ("movw", "bc,ax");
+          else
+            saveScalarReturnForEpilogue (current_return_size);
+        }
 
-      genEndCritical ();
+      emit2 ("pop", "de");
+      clearHLState ();
+
+      adjustFramePointer (frame_local_size, false);
 
       if (!current_return_is_struct && current_return_size > 0 && current_return_size <= K78K0_MAX_SCALAR_BYTES)
-        restoreScalarReturnForEpilogue (current_return_size);
+        {
+          if (current_return_size == 1)
+            emit2 ("mov", "a,c");
+          else if (current_return_size == 2)
+            emit2 ("movw", "ax,bc");
+          else
+            restoreScalarReturnForEpilogue (current_return_size);
+        }
     }
-
-  if (local_stack_size)
+  else
     {
-      if (!current_return_is_struct && current_return_size > 0 && current_return_size <= K78K0_MAX_SCALAR_BYTES)
-        saveScalarReturnForEpilogue (current_return_size);
-
-      setHLToSP ();
-      emit2 ("mov", "a,[hl+0x00]");
-      emit2 ("mov", "x,a");
-      emit2 ("mov", "a,[hl+0x01]");
-      emit2 ("movw", "de,ax");
-
-      adjustFramePointer (local_stack_size, false);
-
-      if (!current_return_is_struct && current_return_size > 0 && current_return_size <= K78K0_MAX_SCALAR_BYTES)
-        restoreScalarReturnForEpilogue (current_return_size);
+      emit2 ("pop", "de");
+      clearHLState ();
     }
 
   if (current_stack_cleanup_size)
     {
       if (!current_return_is_struct && current_return_size > 0 && current_return_size <= K78K0_MAX_SCALAR_BYTES)
-        saveScalarReturnForEpilogue (current_return_size);
+        {
+          if (current_return_size == 1)
+            emit2 ("mov", "c,a");
+          else if (current_return_size == 2)
+            emit2 ("movw", "bc,ax");
+          else
+            saveScalarReturnForEpilogue (current_return_size);
+        }
 
       moveReturnAddressForCalleeCleanup (current_stack_cleanup_size);
 
       if (!current_return_is_struct && current_return_size > 0 && current_return_size <= K78K0_MAX_SCALAR_BYTES)
-        restoreScalarReturnForEpilogue (current_return_size);
+        {
+          if (current_return_size == 1)
+            emit2 ("mov", "a,c");
+          else if (current_return_size == 2)
+            emit2 ("movw", "ax,bc");
+          else
+            restoreScalarReturnForEpilogue (current_return_size);
+        }
     }
 
   wassertl (stack_pushed == 0, "78K0 unbalanced outgoing stack.");
@@ -3610,14 +3652,13 @@ emitVariableShiftLoop (const int size, const bool is_right, const bool is_signed
   makeLocalLabel (loop_label, sizeof (loop_label));
   makeLocalLabel (done_label, sizeof (done_label));
 
-  emitLocalLabel (loop_label);
   emit2 ("mov", "b,a");
   emit2 ("mov", "a,c");
   emit2 ("cmp", "a,#0x00");
-  emitCondBranch ("bz", done_label);
-  emit2 ("sub", "a,#0x01");
-  emit2 ("mov", "c,a");
   emit2 ("mov", "a,b");
+  emitCondBranch ("bz", done_label);
+
+  emitLocalLabel (loop_label);
 
   if (size == 1)
     {
@@ -3638,9 +3679,8 @@ emitVariableShiftLoop (const int size, const bool is_right, const bool is_signed
         emitWordLeftShift ();
     }
 
-  emit2 ("br", "!%s", loop_label);
+  emit2 ("dbnz", "c,%s", loop_label);
   emitLocalLabel (done_label);
-  emit2 ("mov", "a,b");
 }
 
 static bool
@@ -3667,9 +3707,9 @@ clearTargetBytes (const operand *target, const int size)
   if (operandNeedsStackHL (target, size))
     setHLToSP ();
 
+  emit2 ("mov", "a,#0x00");
   for (int offset = 0; offset < size; offset++)
     {
-      emit2 ("mov", "a,#0x00");
       if (!storeAToOperandByte (target, offset))
         return false;
     }
@@ -3680,14 +3720,15 @@ clearTargetBytes (const operand *target, const int size)
 static bool
 fillTargetBytesWithA (const operand *target, const int size)
 {
-  emit2 ("mov", "c,a");
-
   if (operandNeedsStackHL (target, size))
-    setHLToSP ();
+    {
+      emit2 ("mov", "c,a");
+      setHLToSP ();
+      emit2 ("mov", "a,c");
+    }
 
   for (int offset = 0; offset < size; offset++)
     {
-      emit2 ("mov", "a,c");
       if (!storeAToOperandByte (target, offset))
         return false;
     }
@@ -3715,11 +3756,9 @@ copyOperandToWideReturn (const operand *source, const int size)
 static void
 clearWideReturnBytes (const int size)
 {
+  emit2 ("mov", "a,#0x00");
   for (int offset = 0; offset < size; offset++)
-    {
-      emit2 ("mov", "a,#0x00");
-      emit2 ("mov", "!%s,a", wideReturnByteName (offset));
-    }
+    emit2 ("mov", "!%s,a", wideReturnByteName (offset));
 }
 
 static void
@@ -3989,12 +4028,10 @@ genWideVariableShift (const iCode *ic, const bool is_right, const bool is_signed
   makeLocalLabel (loop_label, sizeof (loop_label));
   makeLocalLabel (done_label, sizeof (done_label));
 
-  emitLocalLabel (loop_label);
-  emit2 ("mov", "a,b");
   emit2 ("cmp", "a,#0x00");
   emitCondBranch ("bz", done_label);
-  emit2 ("sub", "a,#0x01");
-  emit2 ("mov", "b,a");
+
+  emitLocalLabel (loop_label);
 
   if (is_right)
     {
@@ -4014,7 +4051,7 @@ genWideVariableShift (const iCode *ic, const bool is_right, const bool is_signed
   else
     shiftWideReturnLeftOne (size);
 
-  emit2 ("br", "!%s", loop_label);
+  emit2 ("dbnz", "b,%s", loop_label);
   emitLocalLabel (done_label);
 
   if (target)

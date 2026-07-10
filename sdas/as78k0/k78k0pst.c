@@ -1,0 +1,165 @@
+/*-------------------------------------------------------------------------
+  k78k0pst.c - 78K0 assembler mnemonic table
+
+  Copyright (C) 2026
+
+  This program is free software; you can redistribute it and/or modify it
+  under the terms of the GNU General Public License as published by the
+  Free Software Foundation; either version 3, or (at your option) any
+  later version.
+-------------------------------------------------------------------------*/
+
+#include "asxxxx.h"
+#include "k78k0.h"
+
+char mode0[32] = {
+  '\200', '\201', '\202', '\203', '\204', '\205', '\206', '\207',
+  '\210', '\211', '\212', '\213', '\214', '\215', '\216', '\217',
+  '\220', '\221', '\222', '\223', '\224', '\225', '\226', '\227',
+  '\230', '\231', '\232', '\233', '\234', '\235', '\236', '\237'
+};
+
+struct mode mode[1] = {
+  { &mode0[0], 0, 0x0000FFFF, 0x0000FFFF }
+};
+
+struct mode *modep[16] = {
+  &mode[0], NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL
+};
+
+struct mne mne[] = {
+  { NULL, "CON",       S_ATYP,        0, A_CON    },
+  { NULL, "OVR",       S_ATYP,        0, A_OVR    },
+  { NULL, "REL",       S_ATYP,        0, A_REL    },
+  { NULL, "ABS",       S_ATYP,        0, A_ABS    },
+  { NULL, "NOPAG",     S_ATYP,        0, A_NOPAG  },
+  { NULL, "PAG",       S_ATYP,        0, A_PAG    },
+  { NULL, "CODE",      S_ATYP,        0, A_CODE   },
+  { NULL, "DATA",      S_ATYP,        0, A_DATA   },
+
+  { NULL, ".page",     S_PAGE,        0, 0        },
+  { NULL, ".title",    S_HEADER,      0, O_TITLE  },
+  { NULL, ".sbttl",    S_HEADER,      0, O_SBTTL  },
+  { NULL, ".module",   S_MODUL,       0, 0        },
+  { NULL, ".include",  S_INCL,        0, I_CODE   },
+  { NULL, ".incbin",   S_INCL,        0, I_BNRY   },
+  { NULL, ".area",     S_AREA,        0, 0        },
+  { NULL, ".org",      S_ORG,         0, 0        },
+  { NULL, ".radix",    S_RADIX,       0, 0        },
+  { NULL, ".globl",    S_GLOBL,       0, 0        },
+  { NULL, ".local",    S_LOCAL,       0, 0        },
+  { NULL, ".if",       S_CONDITIONAL, 0, O_IF     },
+  { NULL, ".iff",      S_CONDITIONAL, 0, O_IFF    },
+  { NULL, ".ift",      S_CONDITIONAL, 0, O_IFT    },
+  { NULL, ".iftf",     S_CONDITIONAL, 0, O_IFTF   },
+  { NULL, ".ifdef",    S_CONDITIONAL, 0, O_IFDEF  },
+  { NULL, ".ifndef",   S_CONDITIONAL, 0, O_IFNDEF },
+  { NULL, ".ifgt",     S_CONDITIONAL, 0, O_IFGT   },
+  { NULL, ".iflt",     S_CONDITIONAL, 0, O_IFLT   },
+  { NULL, ".ifge",     S_CONDITIONAL, 0, O_IFGE   },
+  { NULL, ".ifle",     S_CONDITIONAL, 0, O_IFLE   },
+  { NULL, ".ifeq",     S_CONDITIONAL, 0, O_IFEQ   },
+  { NULL, ".ifne",     S_CONDITIONAL, 0, O_IFNE   },
+  { NULL, ".else",     S_CONDITIONAL, 0, O_ELSE   },
+  { NULL, ".endif",    S_CONDITIONAL, 0, O_ENDIF  },
+  { NULL, ".list",     S_LISTING,     0, O_LIST   },
+  { NULL, ".nlist",    S_LISTING,     0, O_NLIST  },
+  { NULL, ".equ",      S_EQU,         0, O_EQU    },
+  { NULL, ".gblequ",   S_EQU,         0, O_GBLEQU },
+  { NULL, ".lclequ",   S_EQU,         0, O_LCLEQU },
+  { NULL, ".optsdcc",  S_OPTSDCC,     0, 0        },
+  { NULL, ".byte",     S_DATA,        0, O_1BYTE  },
+  { NULL, ".db",       S_DATA,        0, O_1BYTE  },
+  { NULL, ".word",     S_DATA,        0, O_2BYTE  },
+  { NULL, ".dw",       S_DATA,        0, O_2BYTE  },
+  { NULL, ".blkb",     S_BLK,         0, O_1BYTE  },
+  { NULL, ".ds",       S_BLK,         0, O_1BYTE  },
+  { NULL, ".blkw",     S_BLK,         0, O_2BYTE  },
+  { NULL, ".ascii",    S_ASCIX,       0, O_ASCII  },
+  { NULL, ".asciz",    S_ASCIX,       0, O_ASCIZ  },
+  { NULL, ".str",      S_ASCIX,       0, O_ASCII  },
+  { NULL, ".strz",     S_ASCIX,       0, O_ASCIZ  },
+  { NULL, ".define",   S_DEFINE,      0, O_DEF    },
+  { NULL, ".undefine", S_DEFINE,      0, O_UNDEF  },
+  { NULL, ".even",     S_BOUNDARY,    0, O_EVEN   },
+  { NULL, ".odd",      S_BOUNDARY,    0, O_ODD    },
+  { NULL, ".msg",      S_MSG,         0, 0        },
+  { NULL, ".assume",   S_ERROR,       0, O_ASSUME },
+  { NULL, ".error",    S_ERROR,       0, O_ERROR  },
+
+  { NULL, ".macro",    S_MACRO,       0, O_MACRO  },
+  { NULL, ".endm",     S_MACRO,       0, O_ENDM   },
+  { NULL, ".mexit",    S_MACRO,       0, O_MEXIT  },
+  { NULL, ".narg",     S_MACRO,       0, O_NARG   },
+  { NULL, ".nchr",     S_MACRO,       0, O_NCHR   },
+  { NULL, ".ntyp",     S_MACRO,       0, O_NTYP   },
+  { NULL, ".irp",      S_MACRO,       0, O_IRP    },
+  { NULL, ".irpc",     S_MACRO,       0, O_IRPC   },
+  { NULL, ".rept",     S_MACRO,       0, O_REPT   },
+  { NULL, ".nval",     S_MACRO,       0, O_NVAL   },
+  { NULL, ".mdelete",  S_MACRO,       0, O_MDEL   },
+
+  { NULL, "adjba",     S_K78K0_0OP2,  0, 0x6180   },
+  { NULL, "adjbs",     S_K78K0_0OP2,  0, 0x6190   },
+  { NULL, "brk",       S_K78K0_0OP,   0, 0xbf     },
+  { NULL, "halt",      S_K78K0_0OP2,  0, 0x7110   },
+  { NULL, "nop",       S_K78K0_0OP,   0, 0x00     },
+  { NULL, "ret",       S_K78K0_0OP,   0, 0xaf     },
+  { NULL, "retb",      S_K78K0_0OP,   0, 0x9f     },
+  { NULL, "reti",      S_K78K0_0OP,   0, 0x8f     },
+  { NULL, "stop",      S_K78K0_0OP2,  0, 0x7100   },
+  { NULL, "add",       S_K78K0_ADD,   0, 0        },
+  { NULL, "addc",      S_K78K0_ADDC,  0, 0        },
+  { NULL, "addw",      S_K78K0_ADDW,  0, 0        },
+  { NULL, "and1",      S_K78K0_BITMOV1, 0, 0x05   },
+  { NULL, "and",       S_K78K0_AND,   0, 0        },
+  { NULL, "bc",        S_K78K0_CONDBR, 0, 0x8d    },
+  { NULL, "bf",        S_K78K0_BITBR, 0, 0x03     },
+  { NULL, "bnc",       S_K78K0_CONDBR, 0, 0x9d    },
+  { NULL, "bnz",       S_K78K0_CONDBR, 0, 0xbd    },
+  { NULL, "br",        S_K78K0_BR,    0, 0        },
+  { NULL, "bt",        S_K78K0_BITBR, 0, 0x06     },
+  { NULL, "btclr",     S_K78K0_BITBR, 0, 0x01     },
+  { NULL, "bz",        S_K78K0_CONDBR, 0, 0xad    },
+  { NULL, "call",      S_K78K0_CALL,  0, 0        },
+  { NULL, "callf",     S_K78K0_CALLF, 0, 0        },
+  { NULL, "callt",     S_K78K0_CALLT, 0, 0        },
+  { NULL, "clr1",      S_K78K0_BIT1,  0, 0x0b     },
+  { NULL, "cmp",       S_K78K0_CMP,   0, 0        },
+  { NULL, "cmpw",      S_K78K0_CMPW,  0, 0        },
+  { NULL, "dbnz",      S_K78K0_DBNZ,  0, 0        },
+  { NULL, "dec",       S_K78K0_DEC,   0, 0        },
+  { NULL, "decw",      S_K78K0_DECW,  0, 0        },
+  { NULL, "di",        S_K78K0_2BYTE, 0, 0x7b1e   },
+  { NULL, "divuw",     S_K78K0_DIVUW, 0, 0        },
+  { NULL, "ei",        S_K78K0_2BYTE, 0, 0x7a1e   },
+  { NULL, "inc",       S_K78K0_INC,   0, 0        },
+  { NULL, "incw",      S_K78K0_INCW,  0, 0        },
+  { NULL, "mov",       S_K78K0_MOV,   0, 0        },
+  { NULL, "mov1",      S_K78K0_BITMOV1, 0, 0x04   },
+  { NULL, "mulu",      S_K78K0_MULU,  0, 0        },
+  { NULL, "not1",      S_K78K0_BITCY, 0, 0x01     },
+  { NULL, "or",        S_K78K0_OR,    0, 0        },
+  { NULL, "or1",       S_K78K0_BITMOV1, 0, 0x06   },
+  { NULL, "pop",       S_K78K0_POP,   0, 0        },
+  { NULL, "push",      S_K78K0_PUSH,  0, 0        },
+  { NULL, "rol",       S_K78K0_ROT,   0, 0x26     },
+  { NULL, "rol4",      S_K78K0_ROT4,  0, 0x3180   },
+  { NULL, "rolc",      S_K78K0_ROT,   0, 0x27     },
+  { NULL, "ror",       S_K78K0_ROT,   0, 0x24     },
+  { NULL, "ror4",      S_K78K0_ROT4,  0, 0x3190   },
+  { NULL, "rorc",      S_K78K0_ROT,   0, 0x25     },
+  { NULL, "sel",       S_K78K0_SEL,   0, 0        },
+  { NULL, "set1",      S_K78K0_BIT1,  0, 0x0a     },
+  { NULL, "sub",       S_K78K0_SUB,   0, 0        },
+  { NULL, "subc",      S_K78K0_SUBC,  0, 0        },
+  { NULL, "subw",      S_K78K0_SUBW,  0, 0        },
+  { NULL, "xch",       S_K78K0_XCH,   0, 0        },
+  { NULL, "xchw",      S_K78K0_XCHW,  0, 0        },
+  { NULL, "xor1",      S_K78K0_BITMOV1, 0, 0x07   },
+  { NULL, "xor",       S_K78K0_XOR,   0, 0        },
+  { NULL, "movw",      S_K78K0_MOVW,  S_EOL, 0    }
+};

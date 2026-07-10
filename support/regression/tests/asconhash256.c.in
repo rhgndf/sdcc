@@ -73,6 +73,12 @@
 #define NOTEST
 #endif
 
+// These implementations exceed the 78K0 64 KiB code address space.
+#if defined(__SDCC_78k0) && (defined(IMPL_opt32_lowsize) || defined(IMPL_bi8))
+#undef IMPL_{impl}
+#define NOTEST
+#endif
+
 // Bug #3920 - fails test
 #if defined(IMPL_opt8_lowsize) && __STDC_ENDIAN_NATIVE__ == __STDC_ENDIAN_BIG__
 #define NOTEST
@@ -265,6 +271,7 @@ static inline uint64_t LOADBYTES(const uint8_t* bytes, int n) {
   for (i = 0; i < n; ++i) x |= SETBYTE(bytes[i], i);
   return x;
 }
+
 
 /* store bytes from 64-bit Ascon word */
 static inline void STOREBYTES(uint8_t* bytes, uint64_t x, int n) {
@@ -3885,4 +3892,3 @@ void testAscon(void)
   ASSERT(!memcmp(buf, md, CRYPTO_BYTES));
 #endif
 }
-

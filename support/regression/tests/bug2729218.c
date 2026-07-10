@@ -29,7 +29,7 @@ struct iglobals
   unsigned char input_cnt;
 };
 
-#if !defined(__SDCC_sm83) && !defined(__SDCC_pdk14) && !defined(__SDCC_f8)
+#if !defined(__SDCC_sm83) && !defined(__SDCC_pdk14) && !defined(__SDCC_f8) && !defined(__SDCC_78k0)
 #define ig (*(__idata struct iglobals *) 0xf0)
 #else
 struct iglobals ig;

@@ -31,112 +31,57 @@
 	.area CODE
 
 _memcmp:
-	mov	b,a
-	mov	a,x
-	mov	c,a
-	movw	ax,sp
-	subw	ax,#0x0007
-	movw	sp,ax
+	push	de
 	movw	hl,ax
-
-	mov	a,c
-	mov	[hl+0x00],a
-	mov	a,b
-	mov	[hl+0x01],a
-	mov	a,[hl+0x09]
-	mov	[hl+0x02],a
-	mov	a,[hl+0x0a]
-	mov	[hl+0x03],a
-	mov	a,[hl+0x0b]
-	mov	[hl+0x04],a
-	mov	a,[hl+0x0c]
-	mov	[hl+0x05],a
+	movw	ax,sp
+	addw	ax,#0x0006
+	movw	de,ax
+	mov	a,[de]
+	mov	x,a
+	incw	de
+	mov	a,[de]
+	movw	bc,ax
+	movw	ax,sp
+	addw	ax,#0x0004
+	movw	de,ax
+	mov	a,[de]
+	mov	x,a
+	incw	de
+	mov	a,[de]
+	movw	de,ax
 
 00001$:
-	mov	a,[hl+0x04]
-	or	a,[hl+0x05]
+	mov	a,c
+	or	a,b
 	bz	00003$
-
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	mov	x,a
-	mov	a,[hl+0x01]
-	movw	hl,ax
-	mov	a,[hl+0x00]
-	mov	b,a
-
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,[hl+0x02]
-	mov	x,a
-	mov	a,[hl+0x03]
-	movw	hl,ax
-	mov	a,[hl+0x00]
-	mov	c,a
-
-	mov	a,b
-	cmp	a,c
+	mov	a,[de]
+	xch	a,x
+	cmp	a,x
 	bnz	00002$
-
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,[hl+0x00]
-	add	a,#0x01
-	mov	[hl+0x00],a
-	mov	a,[hl+0x01]
-	addc	a,#0x00
-	mov	[hl+0x01],a
-	mov	a,[hl+0x02]
-	add	a,#0x01
-	mov	[hl+0x02],a
-	mov	a,[hl+0x03]
-	addc	a,#0x00
-	mov	[hl+0x03],a
-	mov	a,[hl+0x04]
-	sub	a,#0x01
-	mov	[hl+0x04],a
-	mov	a,[hl+0x05]
-	subc	a,#0x00
-	mov	[hl+0x05],a
+	incw	hl
+	incw	de
+	decw	bc
 	br	!00001$
 
 00002$:
-	mov	a,b
-	sub	a,c
+	sub	a,x
 	mov	x,a
 	mov	a,#0x00
 	subc	a,#0x00
-	mov	b,a
-	mov	a,x
-	mov	c,a
-	movw	ax,sp
-	addw	ax,#0x0007
-	movw	sp,ax
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,[hl+0x01]
-	mov	[hl+0x05],a
-	mov	a,[hl+0x00]
-	mov	[hl+0x04],a
-	movw	ax,sp
-	addw	ax,#0x0004
-	movw	sp,ax
-	mov	a,c
-	mov	x,a
-	mov	a,b
-	ret
+	movw	bc,ax
+	br	!00004$
 
 00003$:
-	movw	ax,sp
-	addw	ax,#0x0007
-	movw	sp,ax
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,[hl+0x01]
-	mov	[hl+0x05],a
-	mov	a,[hl+0x00]
-	mov	[hl+0x04],a
+	movw	bc,#0x0000
+
+00004$:
+	pop	de
+	pop	hl
 	movw	ax,sp
 	addw	ax,#0x0004
 	movw	sp,ax
-	movw	ax,#0x0000
+	push	hl
+	movw	ax,bc
 	ret

@@ -31,59 +31,17 @@
 	.area CODE
 
 _strlen:
-	mov	b,a
-	mov	a,x
-	mov	c,a
-	movw	ax,sp
-	subw	ax,#0x0004
-	movw	sp,ax
 	movw	hl,ax
-
-	mov	a,c
-	mov	[hl+0x00],a
-	mov	a,b
-	mov	[hl+0x01],a
-	mov	a,#0x00
-	mov	[hl+0x02],a
-	mov	[hl+0x03],a
+	movw	bc,#0x0000
 
 00001$:
-	mov	a,[hl+0x00]
-	mov	x,a
-	mov	a,[hl+0x01]
-	movw	hl,ax
-	mov	a,[hl+0x00]
-	mov	b,a
-
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,b
+	mov	a,[hl]
 	cmp	a,#0x00
 	bz	00002$
-
-	mov	a,[hl+0x00]
-	add	a,#0x01
-	mov	[hl+0x00],a
-	mov	a,[hl+0x01]
-	addc	a,#0x00
-	mov	[hl+0x01],a
-	mov	a,[hl+0x02]
-	add	a,#0x01
-	mov	[hl+0x02],a
-	mov	a,[hl+0x03]
-	addc	a,#0x00
-	mov	[hl+0x03],a
+	incw	hl
+	incw	bc
 	br	!00001$
 
 00002$:
-	mov	a,[hl+0x02]
-	mov	c,a
-	mov	a,[hl+0x03]
-	mov	b,a
-	movw	ax,sp
-	addw	ax,#0x0004
-	movw	sp,ax
-	mov	a,c
-	mov	x,a
-	mov	a,b
+	movw	ax,bc
 	ret

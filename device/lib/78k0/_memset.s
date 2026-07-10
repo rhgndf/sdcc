@@ -31,75 +31,41 @@
 	.area CODE
 
 _memset:
-	mov	b,a
-	mov	a,x
-	mov	c,a
-	movw	ax,sp
-	subw	ax,#0x0007
-	movw	sp,ax
+	push	de
+	push	ax
 	movw	hl,ax
-
-	mov	a,c
-	mov	[hl+0x00],a
-	mov	[hl+0x05],a
-	mov	a,b
-	mov	[hl+0x01],a
-	mov	[hl+0x06],a
-	mov	a,[hl+0x09]
-	mov	[hl+0x04],a
-	mov	a,[hl+0x0b]
-	mov	[hl+0x02],a
-	mov	a,[hl+0x0c]
-	mov	[hl+0x03],a
+	movw	ax,sp
+	addw	ax,#0x0008
+	movw	de,ax
+	mov	a,[de]
+	mov	x,a
+	incw	de
+	mov	a,[de]
+	movw	bc,ax
+	movw	ax,sp
+	addw	ax,#0x0006
+	movw	de,ax
+	mov	a,[de]
+	mov	x,a
 
 00001$:
-	mov	a,[hl+0x02]
-	or	a,[hl+0x03]
+	mov	a,c
+	or	a,b
 	bz	00002$
-
-	mov	a,[hl+0x04]
-	mov	b,a
-	mov	a,[hl+0x00]
-	mov	x,a
-	mov	a,[hl+0x01]
-	movw	hl,ax
-	mov	a,b
-	mov	[hl+0x00],a
-
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,[hl+0x00]
-	add	a,#0x01
-	mov	[hl+0x00],a
-	mov	a,[hl+0x01]
-	addc	a,#0x00
-	mov	[hl+0x01],a
-	mov	a,[hl+0x02]
-	sub	a,#0x01
-	mov	[hl+0x02],a
-	mov	a,[hl+0x03]
-	subc	a,#0x00
-	mov	[hl+0x03],a
+	mov	a,x
+	mov	[hl],a
+	incw	hl
+	decw	bc
 	br	!00001$
 
 00002$:
-	mov	a,[hl+0x05]
-	mov	c,a
-	mov	a,[hl+0x06]
-	mov	b,a
-	movw	ax,sp
-	addw	ax,#0x0007
-	movw	sp,ax
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,[hl+0x01]
-	mov	[hl+0x05],a
-	mov	a,[hl+0x00]
-	mov	[hl+0x04],a
+	pop	ax
+	movw	bc,ax
+	pop	de
+	pop	hl
 	movw	ax,sp
 	addw	ax,#0x0004
 	movw	sp,ax
-	mov	a,c
-	mov	x,a
-	mov	a,b
+	push	hl
+	movw	ax,bc
 	ret

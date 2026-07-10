@@ -1785,10 +1785,7 @@ genCast (const iCode *ic)
 
       if (result_size == 2)
         {
-          if (!loadOperandByteToA (right, 0))
-            return false;
-          emit2 ("mov", "x,a");
-          if (!loadOperandByteToA (right, 1))
+          if (!genOperandReturnValue (right))
             return false;
           if (top_byte_mask != 0xffu)
             normalizeBitIntTopByteInA (result);
@@ -1883,10 +1880,7 @@ genCast (const iCode *ic)
 
       if (result_size == 2)
         {
-          if (!loadOperandByteToA (right, 0))
-            return false;
-          emit2 ("mov", "x,a");
-          if (!loadOperandByteToA (right, 1))
+          if (!genOperandReturnValue (right))
             return false;
           normalizeBitIntTopByteInA (result);
           setReturnResult (result, result_size);

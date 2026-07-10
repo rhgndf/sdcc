@@ -34,7 +34,13 @@ def parse_ihx(path):
                 base = upper + address
                 if base + count > 0x10000:
                     raise ValueError(f"{path}:{line_number}: data lies outside 78K0 memory")
-                image.update((base + offset, value) for offset, value in enumerate(data))
+                for offset, value in enumerate(data):
+                    data_address = base + offset
+                    if data_address in image:
+                        raise ValueError(
+                            f"{path}:{line_number}: data overlaps address 0x{data_address:04x}"
+                        )
+                    image[data_address] = value
             elif record_type == 0x01:
                 break
             elif record_type == 0x02:

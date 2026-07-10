@@ -2464,12 +2464,14 @@ genMult (const iCode *ic)
   if (operandNeedsStackHL (left, 1) || operandNeedsStackHL (right, 1))
     setHLToSP ();
 
+  if (!loadOperandByteToA (left, 0))
+    return false;
+  emit2 ("mov", "c,a");
+
   if (!loadOperandByteToA (right, 0))
     return false;
   emit2 ("mov", "x,a");
-
-  if (!loadOperandByteToA (left, 0))
-    return false;
+  emit2 ("mov", "a,c");
   emit2 ("mulu", "x");
 
   if (size == 1)

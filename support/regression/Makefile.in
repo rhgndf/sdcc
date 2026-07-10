@@ -161,6 +161,7 @@ EXCLUDE_PORTS += \
 
 # simulator may be unavailable
 EXCLUDE_PORTS += \
+	78k0 \
 	mos6502 \
 	mos6502-stack-auto
 

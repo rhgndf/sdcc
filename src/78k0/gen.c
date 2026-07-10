@@ -4205,7 +4205,7 @@ genJumpTable (const iCode *ic)
     return false;
 
   size = getSize (operandType (cond));
-  if (size < 1 || size > 2)
+  if (size < 1 || size > K78K0_MAX_SCALAR_BYTES)
     return false;
 
   if (size == 1)

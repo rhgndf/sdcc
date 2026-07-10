@@ -2314,6 +2314,41 @@ genUnaryMinus (const iCode *ic)
   if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || k78k0_operandSize (left) != size)
     return false;
 
+  if (IS_FLOAT (getSpec (operandType (result))))
+    {
+      target = wideAssignmentTarget (ic, result, size);
+
+      if (operandNeedsStackHL (left, size) || (target && operandNeedsStackHL (target, size)))
+        setHLToSP ();
+
+      for (int offset = 0; offset < size; offset++)
+        {
+          if (!loadOperandByteToA (left, offset))
+            return false;
+
+          if (offset == size - 1)
+            emit2 ("xor", "a,#0x80");
+
+          if (target)
+            {
+              if (!storeAToOperandByte (target, offset))
+                return false;
+            }
+          else
+            emit2 ("mov", "!%s,a", wideReturnByteName (offset));
+        }
+
+      if (target)
+        {
+          ic->next->generated = true;
+          clearAResult ();
+        }
+      else if (!setWideReturnResultFromMirror (result, size))
+        return false;
+
+      return true;
+    }
+
   if (size > 2)
     {
       target = wideAssignmentTarget (ic, result, size);
@@ -2820,14 +2855,18 @@ static bool
 genIfx (const iCode *ic)
 {
   operand *cond = IC_COND (ic);
+  sym_link *cond_type;
   symbol *target;
   char label[32];
+  bool is_float;
   int size;
 
   if (!cond)
     return false;
 
   size = k78k0_operandSize (cond);
+  cond_type = getSpec (operandType (cond));
+  is_float = IS_FLOAT (cond_type);
   if (size < 1 || size > K78K0_MAX_SCALAR_BYTES)
     return false;
 
@@ -2844,6 +2883,8 @@ genIfx (const iCode *ic)
         {
           if (!loadOperandByteToA (cond, offset))
             return false;
+          if (is_float && offset == size - 1)
+            emit2 ("and", "a,#0x7f");
           emit2 ("or", "a,b");
           emit2 ("mov", "b,a");
         }

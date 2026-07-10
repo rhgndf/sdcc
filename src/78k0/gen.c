@@ -20,6 +20,8 @@ static const symbol *return_result_sym = NULL;
 static int return_result_size = 0;
 static bool return_result_ax_valid = false;
 static bool hl_is_sp = false;
+static bool hl_sp_offset_valid = false;
+static int hl_sp_offset = 0;
 static int stack_pushed = 0;
 static int local_stack_size = 0;
 static int current_return_size = 0;
@@ -76,6 +78,7 @@ static void
 clearHLState (void)
 {
   hl_is_sp = false;
+  hl_sp_offset_valid = false;
 }
 
 static wideReturnState
@@ -267,6 +270,8 @@ setHLToSP (void)
   emit2 ("movw", "ax,sp");
   emit2 ("movw", "hl,ax");
   hl_is_sp = true;
+  hl_sp_offset_valid = true;
+  hl_sp_offset = 0;
 }
 
 static void
@@ -310,6 +315,31 @@ setHLToStackOffset (const int stack_offset)
     emit2 ("subw", "ax,#0x%04x", (unsigned)(-stack_offset));
   emit2 ("movw", "hl,ax");
   hl_is_sp = stack_offset == 0;
+  hl_sp_offset_valid = true;
+  hl_sp_offset = stack_offset;
+}
+
+static bool
+useHLForStackOffset (const int stack_offset, unsigned *index)
+{
+  int delta;
+
+  if (!hl_sp_offset_valid || stack_offset < hl_sp_offset)
+    return false;
+
+  delta = stack_offset - hl_sp_offset;
+  if (delta > 255)
+    return false;
+
+  clearRegisterStatePreservingWideReturn ();
+  *index = (unsigned)delta;
+  return true;
+}
+
+static int
+stackWindowBase (const int stack_offset)
+{
+  return stack_offset > 255 ? stack_offset & ~0xff : 0;
 }
 
 static int
@@ -379,6 +409,8 @@ adjustStackPointer (const int amount, const bool leave_hl_sp)
     {
       emit2 ("movw", "hl,ax");
       hl_is_sp = true;
+      hl_sp_offset_valid = true;
+      hl_sp_offset = 0;
     }
 }
 
@@ -402,6 +434,8 @@ adjustFramePointer (const int amount, const bool leave_hl_sp)
     {
       emit2 ("movw", "hl,ax");
       hl_is_sp = true;
+      hl_sp_offset_valid = true;
+      hl_sp_offset = 0;
     }
 }
 
@@ -961,20 +995,19 @@ static bool
 loadStackByteToA (const symbol *sym, const int offset)
 {
   const int stack_offset = stackByteOffset (sym, offset);
+  unsigned index;
 
   if (!sym->onStack || stack_offset < 0)
     return false;
 
-  if (stack_offset <= 255)
+  if (!useHLForStackOffset (stack_offset, &index))
     {
-      ensureHLToSP ();
-      emit2 ("mov", "a,[hl+0x%02x]", (unsigned)stack_offset);
+      const int base = stackWindowBase (stack_offset);
+
+      setHLToStackOffset (base);
+      index = (unsigned)(stack_offset - base);
     }
-  else
-    {
-      setHLToStackOffset (stack_offset);
-      emit2 ("mov", "a,[hl+0x00]");
-    }
+  emit2 ("mov", "a,[hl+0x%02x]", index);
 
   return true;
 }
@@ -1319,23 +1352,21 @@ aluOperandByteToA (const char *mnemonic, const operand *op, const int offset)
       if (sym->onStack)
         {
           const int stack_offset = stackByteOffset (sym, offset);
+          unsigned index;
 
           if (stack_offset < 0)
             return false;
 
-          if (stack_offset <= 255)
+          if (!useHLForStackOffset (stack_offset, &index))
             {
-              if (!hl_is_sp)
-                return false;
-              emit2 (mnemonic, "a,[hl+0x%02x]", (unsigned)stack_offset);
-            }
-          else
-            {
+              const int base = stackWindowBase (stack_offset);
+
               emit2 ("mov", "c,a");
-              setHLToStackOffset (stack_offset);
+              setHLToStackOffset (base);
               emit2 ("mov", "a,c");
-              emit2 (mnemonic, "a,[hl+0x00]");
+              index = (unsigned)(stack_offset - base);
             }
+          emit2 (mnemonic, "a,[hl+0x%02x]", index);
           return true;
         }
 
@@ -1371,27 +1402,21 @@ static bool
 storeAToStackByte (const symbol *sym, const int offset)
 {
   const int stack_offset = stackByteOffset (sym, offset);
+  unsigned index;
 
   if (!sym->onStack || stack_offset < 0)
     return false;
 
-  if (stack_offset <= 255)
+  if (!useHLForStackOffset (stack_offset, &index))
     {
-      if (!hl_is_sp)
-        {
-          emit2 ("mov", "c,a");
-          setHLToSP ();
-          emit2 ("mov", "a,c");
-        }
-      emit2 ("mov", "[hl+0x%02x],a", (unsigned)stack_offset);
-    }
-  else
-    {
+      const int base = stackWindowBase (stack_offset);
+
       emit2 ("mov", "c,a");
-      setHLToStackOffset (stack_offset);
+      setHLToStackOffset (base);
       emit2 ("mov", "a,c");
-      emit2 ("mov", "[hl+0x00],a");
+      index = (unsigned)(stack_offset - base);
     }
+  emit2 ("mov", "[hl+0x%02x],a", index);
 
   return true;
 }
@@ -3172,6 +3197,7 @@ loadPointerToHL (const operand *op)
 
   emit2 ("movw", "hl,ax");
   hl_is_sp = false;
+  hl_sp_offset_valid = false;
   return true;
 }
 
@@ -3264,6 +3290,7 @@ setHLFromDE (void)
   emit2 ("movw", "ax,de");
   emit2 ("movw", "hl,ax");
   hl_is_sp = false;
+  hl_sp_offset_valid = false;
 }
 
 static bool
@@ -3496,6 +3523,7 @@ genPointerSet (const iCode *ic)
       emit2 ("movw", "ax,de");
       emit2 ("movw", "hl,ax");
       hl_is_sp = false;
+      hl_sp_offset_valid = false;
       emit2 ("mov", "a,b");
       emit2 ("mov", "[hl+0x%02x],a", (unsigned)offset);
     }
@@ -3576,19 +3604,7 @@ emitByteRightShift (void)
 static void
 emitSignCarryForA (void)
 {
-  char positive_label[32];
-  char shift_label[32];
-
-  makeLocalLabel (positive_label, sizeof (positive_label));
-  makeLocalLabel (shift_label, sizeof (shift_label));
-
-  emit2 ("cmp", "a,#0x80");
-  emitCondBranch ("bc", positive_label);
-  emit2 ("set1", "cy");
-  emit2 ("br", "!%s", shift_label);
-  emitLocalLabel (positive_label);
-  emit2 ("clr1", "cy");
-  emitLocalLabel (shift_label);
+  emit2 ("mov1", "cy,a.7");
 }
 
 static void
@@ -3601,19 +3617,9 @@ emitByteArithmeticRightShift (void)
 static void
 emitSignMaskForA (void)
 {
-  char negative_label[32];
-  char done_label[32];
-
-  makeLocalLabel (negative_label, sizeof (negative_label));
-  makeLocalLabel (done_label, sizeof (done_label));
-
-  emit2 ("cmp", "a,#0x80");
-  emitCondBranch ("bnc", negative_label);
+  emit2 ("rolc", "a,1");
   emit2 ("mov", "a,#0x00");
-  emit2 ("br", "!%s", done_label);
-  emitLocalLabel (negative_label);
-  emit2 ("mov", "a,#0xff");
-  emitLocalLabel (done_label);
+  emit2 ("subc", "a,#0x00");
 }
 
 static void
@@ -3686,6 +3692,13 @@ emitVariableShiftLoop (const int size, const bool is_right, const bool is_signed
 static bool
 copyOperandToTarget (const operand *source, const operand *target, const int size)
 {
+  source = resolveReqvOperand (source);
+  target = resolveReqvOperand (target);
+
+  if (IS_SYMOP (source) && IS_SYMOP (target) &&
+      operandStorageSymbol (source) == operandStorageSymbol (target))
+    return true;
+
   if (operandNeedsStackHL (source, size) || operandNeedsStackHL (target, size))
     setHLToSP ();
 
@@ -3739,6 +3752,9 @@ fillTargetBytesWithA (const operand *target, const int size)
 static bool
 copyOperandToWideReturn (const operand *source, const int size)
 {
+  if (operandInReturnValue (source, size))
+    return true;
+
   if (operandNeedsStackHL (source, size))
     setHLToSP ();
 
@@ -3810,6 +3826,27 @@ shiftTargetLeftOne (const operand *target, const int size)
   return true;
 }
 
+static bool
+shiftTargetLeftBytes (const operand *target, const int size, const int count)
+{
+  int offset;
+
+  for (offset = size - 1; offset >= count; offset--)
+    {
+      if (!loadOperandByteToA (target, offset - count))
+        return false;
+      if (!storeAToOperandByte (target, offset))
+        return false;
+    }
+
+  emit2 ("mov", "a,#0x00");
+  for (offset = 0; offset < count; offset++)
+    if (!storeAToOperandByte (target, offset))
+      return false;
+
+  return true;
+}
+
 static void
 shiftWideReturnLeftOne (const int size)
 {
@@ -3823,6 +3860,22 @@ shiftWideReturnLeftOne (const int size)
     }
 }
 
+static void
+shiftWideReturnLeftBytes (const int size, const int count)
+{
+  int offset;
+
+  for (offset = size - 1; offset >= count; offset--)
+    {
+      emit2 ("mov", "a,!%s", wideReturnByteName (offset - count));
+      emit2 ("mov", "!%s,a", wideReturnByteName (offset));
+    }
+
+  emit2 ("mov", "a,#0x00");
+  for (offset = 0; offset < count; offset++)
+    emit2 ("mov", "!%s,a", wideReturnByteName (offset));
+}
+
 static bool
 shiftTargetRightOne (const operand *target, const int size, const bool is_signed_right)
 {
@@ -3832,15 +3885,7 @@ shiftTargetRightOne (const operand *target, const int size, const bool is_signed
     return false;
 
   if (is_signed_right)
-    {
-      emitSignCarryForA ();
-      if (operandNeedsStackHL (target, size))
-        {
-          emit2 ("mov", "c,a");
-          setHLToSP ();
-          emit2 ("mov", "a,c");
-        }
-    }
+    emitSignCarryForA ();
   else
     emit2 ("clr1", "cy");
 
@@ -3857,6 +3902,38 @@ shiftTargetRightOne (const operand *target, const int size, const bool is_signed
       if (!storeAToOperandByte (target, offset))
         return false;
     }
+
+  return true;
+}
+
+static bool
+shiftTargetRightBytes (const operand *target, const int size, const int count, const bool is_signed_right)
+{
+  int offset;
+
+  if (is_signed_right)
+    {
+      if (!loadOperandByteToA (target, size - 1))
+        return false;
+      emitSignMaskForA ();
+      emit2 ("mov", "b,a");
+    }
+
+  for (offset = 0; offset < size - count; offset++)
+    {
+      if (!loadOperandByteToA (target, offset + count))
+        return false;
+      if (!storeAToOperandByte (target, offset))
+        return false;
+    }
+
+  if (is_signed_right)
+    emit2 ("mov", "a,b");
+  else
+    emit2 ("mov", "a,#0x00");
+  for (; offset < size; offset++)
+    if (!storeAToOperandByte (target, offset))
+      return false;
 
   return true;
 }
@@ -3882,6 +3959,82 @@ shiftWideReturnRightOne (const int size, const bool is_signed_right)
       emit2 ("rorc", "a,1");
       emit2 ("mov", "!%s,a", wideReturnByteName (offset));
     }
+}
+
+static void
+shiftWideReturnRightBytes (const int size, const int count, const bool is_signed_right)
+{
+  int offset;
+
+  if (is_signed_right)
+    {
+      emit2 ("mov", "a,!%s", wideReturnByteName (size - 1));
+      emitSignMaskForA ();
+      emit2 ("mov", "b,a");
+    }
+
+  for (offset = 0; offset < size - count; offset++)
+    {
+      emit2 ("mov", "a,!%s", wideReturnByteName (offset + count));
+      emit2 ("mov", "!%s,a", wideReturnByteName (offset));
+    }
+
+  if (is_signed_right)
+    emit2 ("mov", "a,b");
+  else
+    emit2 ("mov", "a,#0x00");
+  for (; offset < size; offset++)
+    emit2 ("mov", "!%s,a", wideReturnByteName (offset));
+}
+
+static bool
+shiftTargetByBits (const operand *target, const int size, const bool is_right, const bool is_signed_right, const unsigned count)
+{
+  char loop_label[32];
+
+  wassertl (count > 0 && count < 8, "78K0 invalid residual shift count.");
+
+  if (count > 1)
+    {
+      makeLocalLabel (loop_label, sizeof (loop_label));
+      emit2 ("mov", "b,#0x%02x", count);
+      emitLocalLabel (loop_label);
+    }
+
+  if (is_right)
+    {
+      if (!shiftTargetRightOne (target, size, is_signed_right))
+        return false;
+    }
+  else if (!shiftTargetLeftOne (target, size))
+    return false;
+
+  if (count > 1)
+    emit2 ("dbnz", "b,%s", loop_label);
+  return true;
+}
+
+static void
+shiftWideReturnByBits (const int size, const bool is_right, const bool is_signed_right, const unsigned count)
+{
+  char loop_label[32];
+
+  wassertl (count > 0 && count < 8, "78K0 invalid residual shift count.");
+
+  if (count > 1)
+    {
+      makeLocalLabel (loop_label, sizeof (loop_label));
+      emit2 ("mov", "b,#0x%02x", count);
+      emitLocalLabel (loop_label);
+    }
+
+  if (is_right)
+    shiftWideReturnRightOne (size, is_signed_right);
+  else
+    shiftWideReturnLeftOne (size);
+
+  if (count > 1)
+    emit2 ("dbnz", "b,%s", loop_label);
 }
 
 static bool
@@ -3914,6 +4067,7 @@ genWideLiteralShift (const iCode *ic, const bool is_right, const bool is_signed_
   operand *left = IC_LEFT (ic);
   operand *target;
   const unsigned top_byte_mask = unsignedBitIntTopByteMask (result);
+  unsigned byte_count;
   int size = getSize (operandType (result));
 
   if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || getSize (operandType (left)) != size)
@@ -3957,21 +4111,21 @@ genWideLiteralShift (const iCode *ic, const bool is_right, const bool is_signed_
       return setWideReturnResultFromMirror (result, size);
     }
 
+  byte_count = (unsigned)(count / 8u);
+  count %= 8u;
+
   if (target)
     {
       if (!copyOperandToTarget (left, target, size))
         return false;
 
-      while (count--)
-        {
-          if (is_right)
-            {
-              if (!shiftTargetRightOne (target, size, is_signed_right))
-                return false;
-            }
-          else if (!shiftTargetLeftOne (target, size))
-            return false;
-        }
+      if (byte_count &&
+          !(is_right ? shiftTargetRightBytes (target, size, byte_count, is_signed_right) :
+                        shiftTargetLeftBytes (target, size, byte_count)))
+        return false;
+
+      if (count && !shiftTargetByBits (target, size, is_right, is_signed_right, (unsigned)count))
+        return false;
 
       if (!maskTargetTopByte (target, size, top_byte_mask))
         return false;
@@ -3984,13 +4138,16 @@ genWideLiteralShift (const iCode *ic, const bool is_right, const bool is_signed_
   if (!copyOperandToWideReturn (left, size))
     return false;
 
-  while (count--)
+  if (byte_count)
     {
       if (is_right)
-        shiftWideReturnRightOne (size, is_signed_right);
+        shiftWideReturnRightBytes (size, byte_count, is_signed_right);
       else
-        shiftWideReturnLeftOne (size);
+        shiftWideReturnLeftBytes (size, byte_count);
     }
+
+  if (count)
+    shiftWideReturnByBits (size, is_right, is_signed_right, (unsigned)count);
 
   maskWideReturnTopByte (size, top_byte_mask);
 
@@ -4332,6 +4489,7 @@ genJumpTable (const iCode *ic)
   emitWordLeftShift ();
   emit2 ("addw", "ax,#%s", table_label);
   emit2 ("movw", "hl,ax");
+  clearHLState ();
   emit2 ("mov", "a,[hl+0x00]");
   emit2 ("mov", "x,a");
   emit2 ("mov", "a,[hl+0x01]");
@@ -4444,6 +4602,7 @@ genPointerIpush (const iCode *ic)
         emit2 ("addw", "ax,#0x%04x", (unsigned)(pointer_offset + (unsigned long long)offset));
       emit2 ("movw", "hl,ax");
       hl_is_sp = false;
+      hl_sp_offset_valid = false;
       emit2 ("mov", "a,[hl+0x00]");
       emit2 ("mov", "c,a");
       setHLToSP ();
@@ -4669,6 +4828,7 @@ copyStructReturnToHiddenPointer (const operand *left)
       if (offset)
         emit2 ("addw", "ax,#0x%04x", (unsigned)offset);
       emit2 ("movw", "hl,ax");
+      clearHLState ();
       emit2 ("mov", "a,b");
       emit2 ("mov", "[hl+0x00],a");
       clearHLState ();

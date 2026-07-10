@@ -60,25 +60,18 @@ EXCLUDE_ARCH_mos6502 += \
 
 # Generated code or data does not fit in the 78K0 unified 64 KiB address space.
 EXCLUDE_78k0 += \
-	coremark \
 	gte_shiftdi-2 \
 	gcrypt-serpent \
 	serpent \
 	smallserpent \
-	tst_blake2s \
 	tst_bug-3129 \
 	tst_bug-3606 \
 	tst_bug3502965 \
 	tst_dhrystone \
 	tst_gcc-torture-execute-20050826-1 \
-	tst_gcc-torture-execute-ashldi-1 \
-	tst_gcc-torture-execute-ashrdi-1 \
-	tst_gcc-torture-execute-lshrdi-1 \
 	tst_gcc-torture-execute-mode-dependent-address \
 	tst_gcc-torture-execute-pr20601-1 \
 	tst_gcc-torture-execute-pr91137 \
-	tst_lonesha256 \
-	tst_rabbit \
 	tst_sieve
 
 # The port has no restartable-sequence atomics. The Python emulator cannot

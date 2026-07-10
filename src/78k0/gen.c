@@ -286,7 +286,7 @@ stackByteOffset (const symbol *sym, const int offset)
     base -= local_stack_size + K78K0_RETURN_ADDRESS_BYTES + getSize (sym->type) - 1;
   else if (sym->stackSpil && sym->stack < 0)
     base += local_stack_size;
-  else if (sym->_isparm || sym->ismyparm)
+  else if ((sym->_isparm || sym->ismyparm) && !IS_REGPARM (sym->etype))
     base += local_stack_size + current_param_offset;
   else if (sym->stack > 0)
     base -= local_stack_size + K78K0_RETURN_ADDRESS_BYTES + getSize (sym->type) - 1;
@@ -315,6 +315,32 @@ static int
 k78k0_operandSize (const operand *op)
 {
   return op && IS_ITEMP (op) && op->isaddr ? 2 : getSize (operandType (op));
+}
+
+static unsigned long long
+operandLitValueBits (const operand *op)
+{
+  if (IS_FLOAT (operandType (op)))
+    {
+      union
+      {
+        float value;
+        unsigned char bytes[sizeof (float)];
+      }
+      representation;
+      unsigned long long bits = 0;
+
+      representation.value = (float)floatFromVal (OP_VALUE_CONST (op));
+      for (int offset = 0; offset < (int)sizeof (representation.bytes); offset++)
+#ifdef WORDS_BIGENDIAN
+        bits |= (unsigned long long)representation.bytes[sizeof (representation.bytes) - offset - 1] << (offset * 8);
+#else
+        bits |= (unsigned long long)representation.bytes[offset] << (offset * 8);
+#endif
+      return bits;
+    }
+
+  return operandLitValueUll (op);
 }
 
 static bool
@@ -861,7 +887,7 @@ genEndCritical (void)
 static void
 genLiteralReturnValue (const operand *op)
 {
-  const unsigned long long value = operandLitValueUll (op);
+  const unsigned long long value = operandLitValueBits (op);
   const int size = getSize (operandType (op));
 
   if (size <= 1)
@@ -1020,6 +1046,18 @@ loadOperandByteToA (const operand *op, const int offset)
       if (!name)
         return false;
 
+      if (size == 2 && return_result_ax_valid)
+        {
+          emit2 ("mov", "!%s,a", wideReturnByteName (1));
+          emit2 ("mov", "a,x");
+          emit2 ("mov", "!%s,a", wideReturnByteName (0));
+          if (offset == 1)
+            emit2 ("mov", "a,!%s", wideReturnByteName (1));
+          a_result_sym = NULL;
+          return_result_ax_valid = false;
+          return true;
+        }
+
       a_result_sym = NULL;
       return_result_ax_valid = false;
       emit2 ("mov", "a,!%s", name);
@@ -1028,7 +1066,7 @@ loadOperandByteToA (const operand *op, const int offset)
 
   if (IS_OP_LITERAL (op))
     {
-      const unsigned long long value = operandLitValueUll (op);
+      const unsigned long long value = operandLitValueBits (op);
       clearAResult ();
       emit2 ("mov", "a,#0x%02x", (unsigned)((value >> (offset * 8)) & 0xffu));
       return true;
@@ -1051,6 +1089,16 @@ loadOperandByteToA (const operand *op, const int offset)
       if (sym == OP_SYMBOL_CONST (op) && IS_ITEMP (op) && sym->remat && size == 2)
         {
           if (offset > 1 || !loadRematerializedAddressToAX (op))
+            return false;
+
+          if (offset == 0)
+            emit2 ("mov", "a,x");
+          return true;
+        }
+
+      if (sym == OP_SYMBOL_CONST (op) && IS_FUNC (operandType (op)) && size == 2)
+        {
+          if (offset > 1 || !loadFunctionAddressToAX (op))
             return false;
 
           if (offset == 0)
@@ -1204,6 +1252,22 @@ aluOperandByteToA (const char *mnemonic, const operand *op, const int offset)
             }
           else
             emit2 ("mov", "b,a");
+          emit2 ("mov", "a,c");
+          emit2 (mnemonic, "a,b");
+          return true;
+        }
+
+      if (sym == OP_SYMBOL_CONST (op) && IS_FUNC (operandType (op)) && getSize (type) == 2)
+        {
+          if (offset > 1)
+            return false;
+
+          emit2 ("mov", "c,a");
+          if (!loadFunctionAddressToAX (op))
+            return false;
+          if (offset == 0)
+            emit2 ("mov", "a,x");
+          emit2 ("mov", "b,a");
           emit2 ("mov", "a,c");
           emit2 (mnemonic, "a,b");
           return true;
@@ -1364,6 +1428,32 @@ storeReturnMirrorToStack (const symbol *sym, const int size)
 }
 
 static bool
+storeReturnRegistersToDirect (const symbol *sym, const int size)
+{
+  if (!sym->rname[0] || sym->onStack || size < 1 || size > K78K0_MAX_SCALAR_BYTES)
+    return false;
+
+  if (size == 1)
+    {
+      storeAToDirectByte (sym, 0);
+      return true;
+    }
+
+  emit2 ("movw", "de,ax");
+  for (int offset = size - 1; offset >= 2; offset--)
+    {
+      emit2 ("mov", "a,!%s", wideReturnByteName (offset));
+      storeAToDirectByte (sym, offset);
+    }
+  emit2 ("movw", "ax,de");
+  storeAToDirectByte (sym, 1);
+  emit2 ("mov", "a,x");
+  storeAToDirectByte (sym, 0);
+  emit2 ("movw", "ax,de");
+  return true;
+}
+
+static bool
 storeReturnValueToDirect (const operand *right, const symbol *sym, const int size)
 {
   right = resolveReqvOperand (right);
@@ -1461,7 +1551,7 @@ wideAssignmentTarget (const iCode *ic, const operand *result, const int size)
   operand *target;
   operand *right;
 
-  if (!next || next->generated || next->op != '=' || POINTER_SET (next) || !IS_ITEMP (result))
+  if (!next || next->op != '=' || POINTER_SET (next) || !IS_ITEMP (result))
     return NULL;
 
   target = IC_RESULT (next);
@@ -1470,6 +1560,9 @@ wideAssignmentTarget (const iCode *ic, const operand *result, const int size)
     return NULL;
 
   if (OP_SYMBOL_CONST (right) != OP_SYMBOL_CONST (result))
+    return NULL;
+
+  if (OP_SYMBOL_CONST (result)->liveTo > next->seq)
     return NULL;
 
   if (getSize (operandType (target)) != size)
@@ -1714,21 +1807,30 @@ genCast (const iCode *ic)
   if (IS_ITEMP (result))
     {
       symbol *sym = OP_SYMBOL (result);
+      const symbol *storage = operandStorageSymbol (result);
 
-      if (sym->isspilt && sym->usl.spillLoc)
+      if (storage != sym)
         {
           if (result_size < 1 || result_size > K78K0_MAX_SCALAR_BYTES || right_size != result_size)
             return false;
 
-          if (storeReturnValueToStack (right, sym->usl.spillLoc, result_size))
+          if (storage->onStack && storeReturnValueToStack (right, storage, result_size))
+            return true;
+
+          if (!storage->onStack && storeReturnValueToDirect (right, storage, result_size))
             return true;
 
           for (int offset = 0; offset < result_size; offset++)
             {
               if (!loadOperandByteToA (right, offset))
                 return false;
-              if (!storeAToStackByte (sym->usl.spillLoc, offset))
-                return false;
+              if (storage->onStack)
+                {
+                  if (!storeAToStackByte (storage, offset))
+                    return false;
+                }
+              else
+                storeAToDirectByte (storage, offset);
             }
 
           return true;
@@ -1965,6 +2067,8 @@ genPlusWithNarrowOperand (const iCode *ic)
 
   if (!loadNarrowSignExtensionToC (narrow))
     return false;
+  emit2 ("mov", "a,c");
+  emit2 ("mov", "d,a");
 
   if (!loadOperandByteToA (wide, 0))
     return false;
@@ -1982,7 +2086,7 @@ genPlusWithNarrowOperand (const iCode *ic)
 
   if (!loadOperandByteToA (wide, 1))
     return false;
-  emit2 ("add", "a,c");
+  emit2 ("add", "a,d");
   emit2 ("mov", "b,a");
   setHLToSP ();
   emit2 ("mov", "a,b");
@@ -2444,8 +2548,27 @@ finishCall (const iCode *ic, sym_link *ftype, operand *result, int size, const i
 
   if (size > 0 && size <= K78K0_MAX_SCALAR_BYTES)
     {
+      operand *target;
+
       if (size > 2)
         mirrorWideCallReturnBytes (size);
+
+      target = wideAssignmentTarget (ic, result, size);
+      if (target)
+        {
+          const symbol *storage = operandStorageSymbol (target);
+          const bool stored = storage->onStack ?
+            (size > 2 ? storeReturnMirrorToStack (storage, size) : storeAccumulatorToStack (storage, size)) :
+            storeReturnRegistersToDirect (storage, size);
+
+          if (stored)
+            {
+              ic->next->generated = true;
+              clearAResult ();
+              return true;
+            }
+        }
+
       setReturnResult (result, size);
     }
   else
@@ -4051,6 +4174,9 @@ loadFirstArgRegisters (const operand *left)
   if (size < 1 || size > 4)
     return false;
 
+  if (size <= 2 && operandInReturnValueWithAX (left, size))
+    return true;
+
   if (size == 2 && IS_SYMOP (left) && IS_FUNC (OP_SYMBOL_CONST (left)->type))
     return loadFunctionAddressToAX (left);
 
@@ -4265,7 +4391,7 @@ genReturn (const iCode *ic)
 {
   char label[32];
 
-  if (IC_LEFT (ic))
+  if (IC_LEFT (ic) && (current_return_is_struct || current_return_size > 0))
     {
       if (IS_STRUCT (operandType (IC_LEFT (ic))))
         {

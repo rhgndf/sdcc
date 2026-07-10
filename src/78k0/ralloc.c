@@ -139,7 +139,7 @@ k78k0_assignRegisters (ebbIndex *ebbi)
           if (ic->op == FUNCTION)
             in_function = true;
 
-          if (!in_function)
+          if (in_function)
             markRematerializable (ic);
 
           if (ic->op == ENDFUNCTION)
@@ -165,12 +165,21 @@ k78k0_assignRegisters (ebbIndex *ebbi)
           if (ic->op == FUNCTION && IC_LEFT (ic) && IS_SYMOP (IC_LEFT (ic)))
             func_sym = OP_SYMBOL (IC_LEFT (ic));
 
+          if (ic->op == ENDFUNCTION)
+            {
+              func_sym = NULL;
+              continue;
+            }
+
           if (!result || !IS_ITEMP (result) || POINTER_SET (ic))
+            continue;
+
+          if (!func_sym)
             continue;
 
           sym = OP_SYMBOL (result);
           size = getSize (sym->type);
-          if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || sym->remat || sym->isspilt || sym->liveTo <= ic->seq)
+          if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || sym->remat || sym->usl.spillLoc || sym->liveTo <= ic->seq)
             continue;
 
           dbuf_init (&dbuf, 128);

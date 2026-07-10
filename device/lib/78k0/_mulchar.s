@@ -41,7 +41,6 @@ __muluchar:
 	mov	x,a
 	mov	a,c
 	mulu	x
-	mov	a,x
 	br	!__mulchar_cleanup
 
 __mulschar:
@@ -79,16 +78,20 @@ __mulschar:
 	mov	a,c
 	mulu	x
 
+	mov	c,a
 	mov	a,b
 	cmp	a,#0x00
+	mov	a,c
 	bz	00003$
-	mov	a,x
-	xor	a,#0xff
-	add	a,#0x01
+	mov	c,a
+	mov	a,#0x00
+	sub	a,x
+	mov	x,a
+	mov	a,#0x00
+	subc	a,c
 	br	!__mulchar_cleanup
 
 00003$:
-	mov	a,x
 	br	!__mulchar_cleanup
 
 __mulsuchar:
@@ -114,16 +117,20 @@ __mulsuchar:
 	mov	a,c
 	mulu	x
 
+	mov	c,a
 	mov	a,b
 	cmp	a,#0x00
+	mov	a,c
 	bz	00012$
-	mov	a,x
-	xor	a,#0xff
-	add	a,#0x01
+	mov	c,a
+	mov	a,#0x00
+	sub	a,x
+	mov	x,a
+	mov	a,#0x00
+	subc	a,c
 	br	!__mulchar_cleanup
 
 00012$:
-	mov	a,x
 	br	!__mulchar_cleanup
 
 __muluschar:
@@ -147,20 +154,24 @@ __muluschar:
 	mov	a,c
 	mulu	x
 
+	mov	c,a
 	mov	a,b
 	cmp	a,#0x00
+	mov	a,c
 	bz	00022$
-	mov	a,x
-	xor	a,#0xff
-	add	a,#0x01
+	mov	c,a
+	mov	a,#0x00
+	sub	a,x
+	mov	x,a
+	mov	a,#0x00
+	subc	a,c
 	br	!__mulchar_cleanup
 
 00022$:
-	mov	a,x
 	br	!__mulchar_cleanup
 
 __mulchar_cleanup:
-	mov	c,a
+	movw	bc,ax
 	movw	ax,sp
 	movw	hl,ax
 	mov	a,[hl+0x01]
@@ -170,5 +181,5 @@ __mulchar_cleanup:
 	movw	ax,sp
 	addw	ax,#0x0001
 	movw	sp,ax
-	mov	a,c
+	movw	ax,bc
 	ret

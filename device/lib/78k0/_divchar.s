@@ -262,4 +262,11 @@ __divchar_cleanup:
 	addw	ax,#0x0001
 	movw	sp,ax
 	mov	a,c
+	mov	x,a
+	cmp	a,#0x80
+	bc	00061$
+	mov	a,#0xff
+	ret
+00061$:
+	mov	a,#0x00
 	ret

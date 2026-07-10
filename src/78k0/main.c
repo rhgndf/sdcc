@@ -89,7 +89,7 @@ k78k0_reg_parm (sym_link *l, bool reentrant)
 
   k78k0_regparam.n++;
 
-  if (options.noRegParams || !k78k0_regparam.ftype || FUNC_HASVARARGS (k78k0_regparam.ftype))
+  if (options.noRegParams || !k78k0_regparam.ftype)
     return 0;
 
   if (k78k0_regparam.n != 1)

@@ -3661,7 +3661,7 @@ geniCodeParms (ast *parms, value *argVals, int *iArg, int *stack, sym_link *ftyp
   pval = parms->opval.oprnd;
 
   /* if register parm then make it a send */
-  if (((IS_REGPARM (parms->etype) && !IFFUNC_HASVARARGS (ftype)) || IFFUNC_ISBUILTIN (ftype)) &&
+  if (((IS_REGPARM (parms->etype) && (!IFFUNC_HASVARARGS (ftype) || TARGET_IS_78K0)) || IFFUNC_ISBUILTIN (ftype)) &&
     !IFFUNC_ISDYNAMICC (ftype))
     {
 send:

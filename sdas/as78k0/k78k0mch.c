@@ -896,7 +896,7 @@ machine (struct mne *mp)
           if (c == '#')
             {
               expr (&e, 0);
-              outab (0x01);
+              outab (0x11);
               outab (0x1e);
               outrb (&e, R_USGN);
             }

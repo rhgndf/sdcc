@@ -13,6 +13,7 @@ CPP             = @CPP@
 INSTALL         = @INSTALL@
 STRIP           = @STRIP@
 MAKEDEP         = @MAKEDEP@
+PYTHON          = @PYTHON@
 
 top_builddir    = @top_builddir@
 top_srcdir      = @top_srcdir@
@@ -83,7 +84,12 @@ uninstall:
 
 # Performing self-test
 # --------------------
-check:
+check: all
+	test $(srcdir) = . || cp $(srcdir)/t78k0.asm .
+	$(ASX) -plosgff t78k0.asm
+	$(PYTHON) $(srcdir)/check.py $(srcdir)/t78k0.asm t78k0.lst
+	rm -f t78k0.lst t78k0.rel t78k0.sym
+	test $(srcdir) = . || rm -f t78k0.asm
 
 
 # Performing installation test

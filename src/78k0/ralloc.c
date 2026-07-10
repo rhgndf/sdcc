@@ -125,8 +125,6 @@ k78k0_assignRegisters (ebbIndex *ebbi)
   int count = ebbi->count;
   symbol *func_sym = NULL;
 
-  bool in_function = false;
-
   for (int i = 0; i < count; i++)
     {
       iCode *ic;
@@ -135,16 +133,7 @@ k78k0_assignRegisters (ebbIndex *ebbi)
         continue;
 
       for (ic = ebbs[i]->sch; ic; ic = ic->next)
-        {
-          if (ic->op == FUNCTION)
-            in_function = true;
-
-          if (in_function)
-            markRematerializable (ic);
-
-          if (ic->op == ENDFUNCTION)
-            in_function = false;
-        }
+        markRematerializable (ic);
     }
 
   for (int i = 0; i < count; i++)

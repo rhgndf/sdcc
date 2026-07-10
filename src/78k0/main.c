@@ -28,6 +28,7 @@ static char *k78k0_keywords[] = {
   "code",
   "critical",
   "data",
+  "far",
   "idata",
   "interrupt",
   "naked",

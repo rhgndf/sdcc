@@ -89,10 +89,22 @@ def main():
         memory.load(address, bytes((value,)))
     processor.reset()
 
+    recent_pcs = []
     for _ in range(args.max_steps):
         if memory.stopped:
             break
-        processor.step()
+        instruction_pc = processor.pc
+        recent_pcs.append(instruction_pc)
+        del recent_pcs[:-16]
+        try:
+            processor.step()
+        except NotImplementedError as error:
+            instruction = bytes(memory.read((instruction_pc + offset) & 0xFFFF) for offset in range(4))
+            formatted = " ".join(f"{byte:02x}" for byte in instruction)
+            trace = " -> ".join(f"0x{pc:04x}" for pc in recent_pcs)
+            raise RuntimeError(
+                f"unsupported instruction at PC=0x{instruction_pc:04x}: {formatted}; trace: {trace}"
+            ) from error
         if processor.run_state != RunState.RUNNING:
             raise RuntimeError(f"processor stopped at PC=0x{processor.pc:04x}")
     else:

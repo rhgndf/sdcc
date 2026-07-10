@@ -65,6 +65,21 @@ testShift(void)
 {
 #if !defined (__SDCC_pdk13)  && !defined (__SDCC_pdk14)  // Lack of memory
 #if !(defined (__SDCC_pdk15) && defined(__SDCC_STACK_AUTO)) // Lack of code memory
+#if defined (__SDCC_78k0) && SIZE >= 32 // Keep generated code within the 64 KiB address space.
+    TESTSHIFT(0);
+    TESTSHIFT(1);
+    TESTSHIFT(7);
+    TESTSHIFT(8);
+    TESTSHIFT(15);
+    TESTSHIFT(16);
+    TESTSHIFT(23);
+    TESTSHIFT(31);
+#if SIZE >= 64
+    TESTSHIFT(32);
+    TESTSHIFT(47);
+    TESTSHIFT(55);
+#endif
+#else
     TESTSHIFT(0);
     TESTSHIFT(1);
     TESTSHIFT(2);
@@ -136,6 +151,7 @@ testShift(void)
     TESTSHIFT(53);
     TESTSHIFT(54);
     TESTSHIFT(55);
+#endif
 #endif
 #endif
 #endif

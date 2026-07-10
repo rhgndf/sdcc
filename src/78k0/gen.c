@@ -1973,21 +1973,50 @@ genBinaryAccumulatorOp (const iCode *ic, const char *low_mnemonic, const char *h
 
       for (int offset = 0; offset < size; offset++)
         {
-          if (!loadOperandByteToA (left, offset))
-            return false;
-
-          if (operandByteOnStack (right, offset))
+          if (carry_add || carry_sub)
             {
-              emit2 ("movw", "de,ax");
-              setHLToSP ();
-              emit2 ("movw", "ax,de");
-            }
+              if (!loadOperandByteToA (left, offset))
+                return false;
+              emit2 ("mov", "c,a");
+              if (!loadOperandByteToA (right, offset))
+                return false;
+              emit2 ("mov", "b,a");
+              emit2 ("mov", "a,c");
 
-          if (!aluOperandByteToA (offset ? high_mnemonic : low_mnemonic, right, offset))
-            return false;
+              if (offset)
+                {
+                  emit2 ("pop", "psw");
+                  stack_pushed--;
+                  clearHLState ();
+                }
+
+              emit2 (offset ? high_mnemonic : low_mnemonic, "a,b");
+            }
+          else
+            {
+              if (!loadOperandByteToA (left, offset))
+                return false;
+
+              if (operandByteOnStack (right, offset))
+                {
+                  emit2 ("movw", "de,ax");
+                  setHLToSP ();
+                  emit2 ("movw", "ax,de");
+                }
+
+              if (!aluOperandByteToA (offset ? high_mnemonic : low_mnemonic, right, offset))
+                return false;
+            }
 
           if (offset == size - 1 && top_byte_mask != 0xffu)
             emit2 ("and", "a,#0x%02x", top_byte_mask);
+
+          if ((carry_add || carry_sub) && offset != size - 1)
+            {
+              emit2 ("push", "psw");
+              stack_pushed++;
+              clearHLState ();
+            }
 
           if (target)
             {

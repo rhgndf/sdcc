@@ -70,16 +70,19 @@ __divschar:
 	mov	a,#0x00
 	divuw	c
 
+	mov	c,a
 	mov	a,b
 	cmp	a,#0x00
 	bz	00003$
-	mov	a,x
-	xor	a,#0xff
-	add	a,#0x01
+	mov	a,#0x00
+	sub	a,x
+	mov	x,a
+	mov	a,#0x00
+	subc	a,c
 	br	!__divchar_cleanup
 
 00003$:
-	mov	a,x
+	mov	a,c
 	br	!__divchar_cleanup
 
 __divsuchar:
@@ -105,16 +108,19 @@ __divsuchar:
 	mov	a,#0x00
 	divuw	c
 
+	mov	c,a
 	mov	a,b
 	cmp	a,#0x00
 	bz	00012$
-	mov	a,x
-	xor	a,#0xff
-	add	a,#0x01
+	mov	a,#0x00
+	sub	a,x
+	mov	x,a
+	mov	a,#0x00
+	subc	a,c
 	br	!__divchar_cleanup
 
 00012$:
-	mov	a,x
+	mov	a,c
 	br	!__divchar_cleanup
 
 __divuschar:
@@ -140,16 +146,19 @@ __divuschar:
 	mov	a,#0x00
 	divuw	c
 
+	mov	c,a
 	mov	a,b
 	cmp	a,#0x00
 	bz	00022$
-	mov	a,x
-	xor	a,#0xff
-	add	a,#0x01
+	mov	a,#0x00
+	sub	a,x
+	mov	x,a
+	mov	a,#0x00
+	subc	a,c
 	br	!__divchar_cleanup
 
 00022$:
-	mov	a,x
+	mov	a,c
 	br	!__divchar_cleanup
 
 __modschar:
@@ -181,12 +190,17 @@ __modschar:
 	divuw	c
 
 	mov	a,c
+	mov	x,a
+	mov	a,#0x00
+	mov	c,a
 	mov	a,b
 	cmp	a,#0x00
 	bz	00033$
-	mov	a,c
-	xor	a,#0xff
-	add	a,#0x01
+	mov	a,#0x00
+	sub	a,x
+	mov	x,a
+	mov	a,#0x00
+	subc	a,c
 	br	!__divchar_cleanup
 
 00033$:
@@ -217,12 +231,17 @@ __modsuchar:
 	divuw	c
 
 	mov	a,c
+	mov	x,a
+	mov	a,#0x00
+	mov	c,a
 	mov	a,b
 	cmp	a,#0x00
 	bz	00042$
-	mov	a,c
-	xor	a,#0xff
-	add	a,#0x01
+	mov	a,#0x00
+	sub	a,x
+	mov	x,a
+	mov	a,#0x00
+	subc	a,c
 	br	!__divchar_cleanup
 
 00042$:
@@ -248,10 +267,12 @@ __moduschar:
 	divuw	c
 
 	mov	a,c
+	mov	x,a
+	mov	a,#0x00
 	br	!__divchar_cleanup
 
 __divchar_cleanup:
-	mov	c,a
+	movw	bc,ax
 	movw	ax,sp
 	movw	hl,ax
 	mov	a,[hl+0x01]
@@ -261,12 +282,5 @@ __divchar_cleanup:
 	movw	ax,sp
 	addw	ax,#0x0001
 	movw	sp,ax
-	mov	a,c
-	mov	x,a
-	cmp	a,#0x80
-	bc	00061$
-	mov	a,#0xff
-	ret
-00061$:
-	mov	a,#0x00
+	movw	ax,bc
 	ret

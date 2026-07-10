@@ -149,7 +149,8 @@ operandStorageSymbol (const operand *op)
 {
   const symbol *sym = OP_SYMBOL_CONST (op);
 
-  if (IS_ITEMP (op) && sym->usl.spillLoc && !sym->remat)
+  if (IS_ITEMP (op) && sym->usl.spillLoc && !sym->remat &&
+      !IS_FUNC (sym->usl.spillLoc->type))
     return sym->usl.spillLoc;
 
   return sym;
@@ -1595,7 +1596,13 @@ genAssign (const iCode *ic)
           if (size > K78K0_MAX_SCALAR_BYTES)
             return false;
 
-          if (storeReturnValueToStack (right, rsym, size))
+          if (rsym->onStack && storeReturnValueToStack (right, rsym, size))
+            {
+              restoreWideReturnStateIfUnrelated (saved_wide_return, result);
+              return true;
+            }
+
+          if (!rsym->onStack && storeReturnValueToDirect (right, rsym, size))
             {
               restoreWideReturnStateIfUnrelated (saved_wide_return, result);
               return true;
@@ -1605,8 +1612,13 @@ genAssign (const iCode *ic)
             {
               if (!loadOperandByteToA (right, offset))
                 return false;
-              if (!storeAToStackByte (rsym, offset))
-                return false;
+              if (rsym->onStack)
+                {
+                  if (!storeAToStackByte (rsym, offset))
+                    return false;
+                }
+              else
+                storeAToDirectByte (rsym, offset);
             }
 
           restoreWideReturnStateIfUnrelated (saved_wide_return, result);

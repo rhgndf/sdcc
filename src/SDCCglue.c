@@ -2668,6 +2668,8 @@ glue (void)
         fprintf (asmFile, "\tjp\t#__sdcc_program_startup\n");
       else if(TARGET_PDK_LIKE)
         fprintf (asmFile, "\tgoto\t__sdcc_program_startup\n");
+      else if(TARGET_78K0_LIKE)
+        fprintf (asmFile, "\tbr\t!__sdcc_program_startup\n");
       else
         fprintf (asmFile, "\t%cjmp\t__sdcc_program_startup\n", options.acall_ajmp ? 'a' : 'l');
     }
@@ -2693,6 +2695,17 @@ glue (void)
         fprintf (asmFile, "\tjp\t#_main\n");
       else if(TARGET_PDK_LIKE)
         fprintf (asmFile, "\tgoto\t_main\n");
+      else if(TARGET_78K0_LIKE)
+        {
+          if (IFFUNC_ISNORETURN (mainf->type))
+            fprintf (asmFile, "\tbr\t!_main\n");
+          else
+            {
+              fprintf (asmFile, "\tcall\t!_main\n");
+              fprintf (asmFile, "__sdcc_program_exit:\n");
+              fprintf (asmFile, "\tbr\t!__sdcc_program_exit\n");
+            }
+        }
       else
         {
           if (IFFUNC_ISNORETURN (mainf->type))

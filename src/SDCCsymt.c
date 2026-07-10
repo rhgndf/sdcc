@@ -2264,6 +2264,13 @@ checkSClass (symbol *sym, bool isProto)
       if (SPEC_ADDR (sym->etype) + getSize (sym->type) - 1 > 0xff)
         werror (W_DATA_ABSRANGE, sym->name);
     }
+  else if (TARGET_IS_78K0 && IS_ABSOLUTE (sym->etype) && SPEC_SCLS (sym->etype) == S_SFR)
+    {
+      if (SPEC_ADDR (sym->etype) <= 0xff)
+        SPEC_ADDR (sym->etype) |= 0xff00;
+      if (SPEC_ADDR (sym->etype) < 0xff00 || SPEC_ADDR (sym->etype) > 0xffff)
+        werror (W_SFR_ABSRANGE, sym->name);
+    }
   else if (TARGET_IS_SM83 && IS_ABSOLUTE (sym->etype) && SPEC_SCLS (sym->etype) == S_SFR)
     {// Unlike the other z80-like ports, sm83 has memory mapped I/O in the 0xff00-0xffff range.
       if (SPEC_ADDR (sym->etype) < 0xff00 || SPEC_ADDR (sym->etype) > 0xffff)

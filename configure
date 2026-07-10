@@ -658,6 +658,7 @@ OPT_DISABLE_SDCPP
 OPT_DISABLE_PACKIHX
 OPT_DISABLE_DEVICE_LIB
 OPT_DISABLE_UCSIM
+OPT_DISABLE_78K0
 OPT_DISABLE_F8L
 OPT_DISABLE_F8
 OPT_DISABLE_MOS65C02
@@ -823,6 +824,7 @@ enable_mos6502_port
 enable_mos65c02_port
 enable_f8_port
 enable_f8l_port
+enable_78k0_port
 enable_ucsim
 enable_device_lib
 enable_packihx
@@ -1517,6 +1519,7 @@ Optional Features:
   --disable-mos65c02-port Excludes the MOS65C02 port
   --disable-f8-port       Excludes the f8 port
   --disable-f8l-port      Excludes the f8l port
+  --disable-78k0-port     Excludes the 78K0 port
   --disable-ucsim         Disables configuring and building of ucsim
   --disable-device-lib    Disables building device libraries
   --disable-packihx       Disables building packihx
@@ -8318,6 +8321,31 @@ printf "%s\n" "#define OPT_DISABLE_F8L $OPT_DISABLE_F8L" >>confdefs.h
   fi
 
 
+  # Check whether --enable-78k0-port was given.
+if test ${enable_78k0_port+y}
+then :
+  enableval=$enable_78k0_port;
+fi
+
+
+  if test "$enable_78k0_port" = "no"; then
+    OPT_DISABLE_78K0=1
+  else
+    enable_78k0_port="yes"
+    OPT_DISABLE_78K0=0
+  fi
+
+
+printf "%s\n" "#define OPT_DISABLE_78K0 $OPT_DISABLE_78K0" >>confdefs.h
+
+
+
+  echo 78k0 >>ports.all
+  if test $OPT_DISABLE_78K0 = 0; then
+    echo 78k0 >>ports.build
+  fi
+
+
 # Example for a port disabled by default, in case all the above are enabled by default:
 ####AC_DO_PORT_ENABLER(avr,   avr,   AVR,   [Includes the AVR port (disabled by default)])
 
@@ -9007,6 +9035,13 @@ fi
 
 if test $OPT_DISABLE_F8L = 0; then
   test $OPT_DISABLE_DEVICE_LIB = 0 && ac_config_files="$ac_config_files device/lib/f8l/Makefile"
+
+fi
+
+if test $OPT_DISABLE_78K0 = 0; then
+  ac_config_files="$ac_config_files src/78k0/Makefile sdas/as78k0/Makefile"
+
+  test $OPT_DISABLE_DEVICE_LIB = 0 && ac_config_files="$ac_config_files device/lib/78k0/Makefile"
 
 fi
 
@@ -9783,6 +9818,9 @@ do
     "sdas/asf8/Makefile") CONFIG_FILES="$CONFIG_FILES sdas/asf8/Makefile" ;;
     "device/lib/f8/Makefile") CONFIG_FILES="$CONFIG_FILES device/lib/f8/Makefile" ;;
     "device/lib/f8l/Makefile") CONFIG_FILES="$CONFIG_FILES device/lib/f8l/Makefile" ;;
+    "src/78k0/Makefile") CONFIG_FILES="$CONFIG_FILES src/78k0/Makefile" ;;
+    "sdas/as78k0/Makefile") CONFIG_FILES="$CONFIG_FILES sdas/as78k0/Makefile" ;;
+    "device/lib/78k0/Makefile") CONFIG_FILES="$CONFIG_FILES device/lib/78k0/Makefile" ;;
     "device/lib/Makefile") CONFIG_FILES="$CONFIG_FILES device/lib/Makefile" ;;
     "device/non-free/lib/Makefile") CONFIG_FILES="$CONFIG_FILES device/non-free/lib/Makefile" ;;
     "main.mk") CONFIG_FILES="$CONFIG_FILES main.mk:main_in.mk" ;;

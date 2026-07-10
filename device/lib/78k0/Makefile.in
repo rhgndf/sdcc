@@ -1,0 +1,55 @@
+# libc/78k0 Makefile
+
+VPATH  = @srcdir@
+srcdir = @srcdir@
+top_builddir = @top_builddir@
+
+LIB_TYPE = @LIB_TYPE@
+
+SAS = $(top_builddir)/bin/sdas78k0
+
+# override PORTDIR defined by super (parent) makefile
+override PORTDIR = ../build/78k0
+
+OBJ = __sdcc_regs.rel _memcmp.rel _memcpy.rel _memset.rel _strlen.rel _strnlen.rel _mulchar.rel _mulint.rel _mullong.rel _mullonglong.rel _divchar.rel _divuint.rel _divsint.rel _divulong.rel _divslong.rel _divlonglong.rel
+LIB = 78k0.lib
+AS = $(SAS)
+ASFLAGS = -plosgff
+
+all: $(PORTDIR)/$(LIB)
+
+$(PORTDIR):
+	mkdir -p $(PORTDIR)
+
+$(PORTDIR)/$(LIB): $(PORTDIR) $(OBJ) Makefile
+ifeq ($(LIB_TYPE), SDCCLIB)
+	rm -f $@; \
+	$(top_builddir)/bin/sdcclib -a $@ $(OBJ)
+else
+  ifeq ($(LIB_TYPE), AR)
+	$(top_builddir)/bin/sdar -rcSD $@ $(OBJ)
+  else
+    ifeq ($(LIB_TYPE), RANLIB)
+	$(top_builddir)/bin/sdar -rcD $@ $(OBJ)
+    else
+	rm -f $@
+	for i in $(basename $(OBJ)); do echo $$i >>$@; done
+	cp $(OBJ) $(PORTDIR)
+    endif
+  endif
+endif
+
+%.rel: %.s
+	@# TODO: sdas should place its output in the current dir
+	test $(srcdir) = . || cp $< .
+	-$(AS) $(ASFLAGS) $(notdir $<)
+	test $(srcdir) = . || rm $(notdir $<)
+
+clean:
+	rm -f *.rel *.sym *.lst *~ $(CLEANSPEC) *.dump* *.asm *.lib
+
+distclean: clean
+	rm -f Makefile
+
+Makefile: $(srcdir)/Makefile.in
+	cd $(top_builddir); ./config.status device/lib/78k0/Makefile

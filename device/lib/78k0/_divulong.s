@@ -1,0 +1,207 @@
+;--------------------------------------------------------------------------
+;  _divulong.s
+;
+;  Copyright (C) 2026
+;
+;  This library is free software; you can redistribute it and/or modify it
+;  under the terms of the GNU General Public License as published by the
+;  Free Software Foundation; either version 2, or (at your option) any
+;  later version.
+;
+;  This library is distributed in the hope that it will be useful,
+;  but WITHOUT ANY WARRANTY; without even the implied warranty of
+;  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;  GNU General Public License for more details.
+;
+;  You should have received a copy of the GNU General Public License
+;  along with this library; see the file COPYING. If not, write to the
+;  Free Software Foundation, 51 Franklin Street, Fifth Floor, Boston,
+;   MA 02110-1301, USA.
+;
+;  As a special exception, if you link this library with other files,
+;  some of which are compiled with SDCC, to produce an executable,
+;  this library does not by itself cause the resulting executable to
+;  be covered by the GNU General Public License. This exception does
+;  not however invalidate any other reasons why the executable file
+;   might be covered by the GNU General Public License.
+;--------------------------------------------------------------------------
+
+	.globl __divulong
+	.globl __modulong
+	.globl ___SDCC_k78k0_ret2
+	.globl ___SDCC_k78k0_ret3
+
+	.area CODE
+
+__divulong:
+	push	ax
+	movw	ax,de
+	push	ax
+	movw	ax,sp
+	subw	ax,#0x000d
+	movw	sp,ax
+	movw	hl,ax
+	mov	a,#0x00
+	br	!__divmodulong
+
+__modulong:
+	push	ax
+	movw	ax,de
+	push	ax
+	movw	ax,sp
+	subw	ax,#0x000d
+	movw	sp,ax
+	movw	hl,ax
+	mov	a,#0x01
+
+__divmodulong:
+	mov	[hl+0x0c],a
+
+	mov	a,[hl+0x0f]
+	mov	x,a
+	mov	a,[hl+0x10]
+	mov	[hl+0x01],a
+	mov	a,x
+	mov	[hl+0x00],a
+	mov	a,c
+	mov	[hl+0x02],a
+	mov	a,b
+	mov	[hl+0x03],a
+
+	mov	a,#0x00
+	mov	[hl+0x04],a
+	mov	[hl+0x05],a
+	mov	[hl+0x06],a
+	mov	[hl+0x07],a
+
+	mov	a,[hl+0x13]
+	mov	[hl+0x08],a
+	mov	a,[hl+0x14]
+	mov	[hl+0x09],a
+	mov	a,[hl+0x15]
+	mov	[hl+0x0a],a
+	mov	a,[hl+0x16]
+	mov	[hl+0x0b],a
+
+	mov	a,#0x20
+	mov	b,a
+
+00001$:
+	clr1	cy
+	mov	a,[hl+0x00]
+	rolc	a,1
+	mov	[hl+0x00],a
+	mov	a,[hl+0x01]
+	rolc	a,1
+	mov	[hl+0x01],a
+	mov	a,[hl+0x02]
+	rolc	a,1
+	mov	[hl+0x02],a
+	mov	a,[hl+0x03]
+	rolc	a,1
+	mov	[hl+0x03],a
+	mov	a,[hl+0x04]
+	rolc	a,1
+	mov	[hl+0x04],a
+	mov	a,[hl+0x05]
+	rolc	a,1
+	mov	[hl+0x05],a
+	mov	a,[hl+0x06]
+	rolc	a,1
+	mov	[hl+0x06],a
+	mov	a,[hl+0x07]
+	rolc	a,1
+	mov	[hl+0x07],a
+
+	mov	a,[hl+0x07]
+	cmp	a,[hl+0x0b]
+	bc	00002$
+	bnz	00003$
+	mov	a,[hl+0x06]
+	cmp	a,[hl+0x0a]
+	bc	00002$
+	bnz	00003$
+	mov	a,[hl+0x05]
+	cmp	a,[hl+0x09]
+	bc	00002$
+	bnz	00003$
+	mov	a,[hl+0x04]
+	cmp	a,[hl+0x08]
+	bc	00002$
+
+00003$:
+	mov	a,[hl+0x04]
+	sub	a,[hl+0x08]
+	mov	[hl+0x04],a
+	mov	a,[hl+0x05]
+	subc	a,[hl+0x09]
+	mov	[hl+0x05],a
+	mov	a,[hl+0x06]
+	subc	a,[hl+0x0a]
+	mov	[hl+0x06],a
+	mov	a,[hl+0x07]
+	subc	a,[hl+0x0b]
+	mov	[hl+0x07],a
+	mov	a,[hl+0x00]
+	or	a,#0x01
+	mov	[hl+0x00],a
+
+00002$:
+	dbnz	b,00001$
+
+	mov	a,[hl+0x0c]
+	cmp	a,#0x00
+	bnz	00004$
+
+	mov	a,[hl+0x02]
+	mov	!___SDCC_k78k0_ret2,a
+	mov	c,a
+	mov	a,[hl+0x03]
+	mov	!___SDCC_k78k0_ret3,a
+	mov	b,a
+	mov	a,[hl+0x00]
+	mov	x,a
+	mov	a,[hl+0x01]
+	br	!00005$
+
+00004$:
+	mov	a,[hl+0x06]
+	mov	!___SDCC_k78k0_ret2,a
+	mov	c,a
+	mov	a,[hl+0x07]
+	mov	!___SDCC_k78k0_ret3,a
+	mov	b,a
+	mov	a,[hl+0x04]
+	mov	x,a
+	mov	a,[hl+0x05]
+
+00005$:
+	mov	[hl+0x01],a
+	mov	a,x
+	mov	[hl+0x00],a
+
+	mov	a,[hl+0x0d]
+	mov	x,a
+	mov	a,[hl+0x0e]
+	movw	de,ax
+
+	mov	a,[hl+0x12]
+	mov	c,a
+	mov	a,c
+	mov	[hl+0x16],a
+	mov	a,[hl+0x11]
+	mov	c,a
+	mov	a,c
+	mov	[hl+0x15],a
+
+	movw	ax,sp
+	addw	ax,#0x0015
+	movw	sp,ax
+	mov	a,!___SDCC_k78k0_ret2
+	mov	c,a
+	mov	a,!___SDCC_k78k0_ret3
+	mov	b,a
+	mov	a,[hl+0x00]
+	mov	x,a
+	mov	a,[hl+0x01]
+	ret

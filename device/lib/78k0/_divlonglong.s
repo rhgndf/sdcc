@@ -1,0 +1,705 @@
+;--------------------------------------------------------------------------
+;  _divlonglong.s
+;
+;  Copyright (C) 2026
+;
+;  This library is free software; you can redistribute it and/or modify it
+;  under the terms of the GNU General Public License as published by the
+;  Free Software Foundation; either version 2, or (at your option) any
+;  later version.
+;
+;  This library is distributed in the hope that it will be useful,
+;  but WITHOUT ANY WARRANTY; without even the implied warranty of
+;  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;  GNU General Public License for more details.
+;
+;  You should have received a copy of the GNU General Public License
+;  along with this library; see the file COPYING. If not, write to the
+;  Free Software Foundation, 51 Franklin Street, Fifth Floor, Boston,
+;   MA 02110-1301, USA.
+;
+;  As a special exception, if you link this library with other files,
+;  some of which are compiled with SDCC, to produce an executable,
+;  this library does not by itself cause the resulting executable to
+;  be covered by the GNU General Public License. This exception does
+;  not however invalidate any other reasons why the executable file
+;   might be covered by the GNU General Public License.
+;--------------------------------------------------------------------------
+
+	.globl __divulonglong
+	.globl __modulonglong
+	.globl __divslonglong
+	.globl __modslonglong
+	.globl ___SDCC_k78k0_ret2
+	.globl ___SDCC_k78k0_ret3
+	.globl ___SDCC_k78k0_ret4
+	.globl ___SDCC_k78k0_ret5
+	.globl ___SDCC_k78k0_ret6
+	.globl ___SDCC_k78k0_ret7
+
+	.area CODE
+
+__divulonglong:
+	mov	a,#0x00
+	br	!__divmodulonglong
+
+__modulonglong:
+	mov	a,#0x01
+
+__divmodulonglong:
+	mov	c,a
+	movw	ax,sp
+	subw	ax,#0x0019
+	movw	sp,ax
+	movw	hl,ax
+	movw	ax,de
+	push	ax
+	mov	a,c
+	mov	[hl+0x18],a
+
+	mov	a,[hl+0x1b]
+	mov	[hl+0x00],a
+	mov	a,[hl+0x1c]
+	mov	[hl+0x01],a
+	mov	a,[hl+0x1d]
+	mov	[hl+0x02],a
+	mov	a,[hl+0x1e]
+	mov	[hl+0x03],a
+	mov	a,[hl+0x1f]
+	mov	[hl+0x04],a
+	mov	a,[hl+0x20]
+	mov	[hl+0x05],a
+	mov	a,[hl+0x21]
+	mov	[hl+0x06],a
+	mov	a,[hl+0x22]
+	mov	[hl+0x07],a
+
+	mov	a,#0x00
+	mov	[hl+0x08],a
+	mov	[hl+0x09],a
+	mov	[hl+0x0a],a
+	mov	[hl+0x0b],a
+	mov	[hl+0x0c],a
+	mov	[hl+0x0d],a
+	mov	[hl+0x0e],a
+	mov	[hl+0x0f],a
+
+	mov	a,[hl+0x23]
+	mov	[hl+0x10],a
+	mov	a,[hl+0x24]
+	mov	[hl+0x11],a
+	mov	a,[hl+0x25]
+	mov	[hl+0x12],a
+	mov	a,[hl+0x26]
+	mov	[hl+0x13],a
+	mov	a,[hl+0x27]
+	mov	[hl+0x14],a
+	mov	a,[hl+0x28]
+	mov	[hl+0x15],a
+	mov	a,[hl+0x29]
+	mov	[hl+0x16],a
+	mov	a,[hl+0x2a]
+	mov	[hl+0x17],a
+
+	mov	a,#0x40
+	mov	b,a
+
+00101$:
+	clr1	cy
+	mov	a,[hl+0x00]
+	rolc	a,1
+	mov	[hl+0x00],a
+	mov	a,[hl+0x01]
+	rolc	a,1
+	mov	[hl+0x01],a
+	mov	a,[hl+0x02]
+	rolc	a,1
+	mov	[hl+0x02],a
+	mov	a,[hl+0x03]
+	rolc	a,1
+	mov	[hl+0x03],a
+	mov	a,[hl+0x04]
+	rolc	a,1
+	mov	[hl+0x04],a
+	mov	a,[hl+0x05]
+	rolc	a,1
+	mov	[hl+0x05],a
+	mov	a,[hl+0x06]
+	rolc	a,1
+	mov	[hl+0x06],a
+	mov	a,[hl+0x07]
+	rolc	a,1
+	mov	[hl+0x07],a
+	mov	a,[hl+0x08]
+	rolc	a,1
+	mov	[hl+0x08],a
+	mov	a,[hl+0x09]
+	rolc	a,1
+	mov	[hl+0x09],a
+	mov	a,[hl+0x0a]
+	rolc	a,1
+	mov	[hl+0x0a],a
+	mov	a,[hl+0x0b]
+	rolc	a,1
+	mov	[hl+0x0b],a
+	mov	a,[hl+0x0c]
+	rolc	a,1
+	mov	[hl+0x0c],a
+	mov	a,[hl+0x0d]
+	rolc	a,1
+	mov	[hl+0x0d],a
+	mov	a,[hl+0x0e]
+	rolc	a,1
+	mov	[hl+0x0e],a
+	mov	a,[hl+0x0f]
+	rolc	a,1
+	mov	[hl+0x0f],a
+
+	mov	a,[hl+0x0f]
+	cmp	a,[hl+0x17]
+	bc	00102$
+	bnz	00103$
+	mov	a,[hl+0x0e]
+	cmp	a,[hl+0x16]
+	bc	00102$
+	bnz	00103$
+	mov	a,[hl+0x0d]
+	cmp	a,[hl+0x15]
+	bc	00102$
+	bnz	00103$
+	mov	a,[hl+0x0c]
+	cmp	a,[hl+0x14]
+	bc	00102$
+	bnz	00103$
+	mov	a,[hl+0x0b]
+	cmp	a,[hl+0x13]
+	bc	00102$
+	bnz	00103$
+	mov	a,[hl+0x0a]
+	cmp	a,[hl+0x12]
+	bc	00102$
+	bnz	00103$
+	mov	a,[hl+0x09]
+	cmp	a,[hl+0x11]
+	bc	00102$
+	bnz	00103$
+	mov	a,[hl+0x08]
+	cmp	a,[hl+0x10]
+	bc	00102$
+
+00103$:
+	mov	a,[hl+0x08]
+	sub	a,[hl+0x10]
+	mov	[hl+0x08],a
+	mov	a,[hl+0x09]
+	subc	a,[hl+0x11]
+	mov	[hl+0x09],a
+	mov	a,[hl+0x0a]
+	subc	a,[hl+0x12]
+	mov	[hl+0x0a],a
+	mov	a,[hl+0x0b]
+	subc	a,[hl+0x13]
+	mov	[hl+0x0b],a
+	mov	a,[hl+0x0c]
+	subc	a,[hl+0x14]
+	mov	[hl+0x0c],a
+	mov	a,[hl+0x0d]
+	subc	a,[hl+0x15]
+	mov	[hl+0x0d],a
+	mov	a,[hl+0x0e]
+	subc	a,[hl+0x16]
+	mov	[hl+0x0e],a
+	mov	a,[hl+0x0f]
+	subc	a,[hl+0x17]
+	mov	[hl+0x0f],a
+	mov	a,[hl+0x00]
+	or	a,#0x01
+	mov	[hl+0x00],a
+
+00102$:
+	dbnz	b,00106$
+	br	!00107$
+00106$:
+	br	!00101$
+
+00107$:
+	mov	a,[hl+0x18]
+	cmp	a,#0x00
+	bnz	00104$
+
+	mov	a,[hl+0x02]
+	mov	!___SDCC_k78k0_ret2,a
+	mov	a,[hl+0x03]
+	mov	!___SDCC_k78k0_ret3,a
+	mov	a,[hl+0x04]
+	mov	!___SDCC_k78k0_ret4,a
+	mov	a,[hl+0x05]
+	mov	!___SDCC_k78k0_ret5,a
+	mov	a,[hl+0x06]
+	mov	!___SDCC_k78k0_ret6,a
+	mov	a,[hl+0x07]
+	mov	!___SDCC_k78k0_ret7,a
+	mov	a,[hl+0x02]
+	mov	c,a
+	mov	a,[hl+0x03]
+	mov	b,a
+	mov	a,[hl+0x00]
+	mov	x,a
+	mov	a,[hl+0x01]
+	br	!00105$
+
+00104$:
+	mov	a,[hl+0x0a]
+	mov	!___SDCC_k78k0_ret2,a
+	mov	a,[hl+0x0b]
+	mov	!___SDCC_k78k0_ret3,a
+	mov	a,[hl+0x0c]
+	mov	!___SDCC_k78k0_ret4,a
+	mov	a,[hl+0x0d]
+	mov	!___SDCC_k78k0_ret5,a
+	mov	a,[hl+0x0e]
+	mov	!___SDCC_k78k0_ret6,a
+	mov	a,[hl+0x0f]
+	mov	!___SDCC_k78k0_ret7,a
+	mov	a,[hl+0x0a]
+	mov	c,a
+	mov	a,[hl+0x0b]
+	mov	b,a
+	mov	a,[hl+0x08]
+	mov	x,a
+	mov	a,[hl+0x09]
+
+00105$:
+	xch	a,x
+	mov	[hl+0x00],a
+	xch	a,x
+	mov	[hl+0x01],a
+	movw	ax,sp
+	movw	hl,ax
+	mov	a,[hl+0x00]
+	mov	x,a
+	mov	a,[hl+0x01]
+	movw	de,ax
+	mov	a,[hl+0x1c]
+	mov	[hl+0x2c],a
+	mov	a,[hl+0x1b]
+	mov	[hl+0x2b],a
+	movw	ax,sp
+	addw	ax,#0x002b
+	movw	sp,ax
+	mov	a,[hl+0x02]
+	mov	x,a
+	mov	a,[hl+0x03]
+	ret
+
+__divslonglong:
+	mov	a,#0x00
+	br	!__divmodslonglong
+
+__modslonglong:
+	mov	a,#0x01
+
+__divmodslonglong:
+	mov	c,a
+	movw	ax,sp
+	subw	ax,#0x001a
+	movw	sp,ax
+	movw	hl,ax
+	movw	ax,de
+	push	ax
+	mov	a,c
+	mov	[hl+0x18],a
+	mov	a,#0x00
+	mov	[hl+0x19],a
+
+	mov	a,[hl+0x1c]
+	mov	[hl+0x00],a
+	mov	a,[hl+0x1d]
+	mov	[hl+0x01],a
+	mov	a,[hl+0x1e]
+	mov	[hl+0x02],a
+	mov	a,[hl+0x1f]
+	mov	[hl+0x03],a
+	mov	a,[hl+0x20]
+	mov	[hl+0x04],a
+	mov	a,[hl+0x21]
+	mov	[hl+0x05],a
+	mov	a,[hl+0x22]
+	mov	[hl+0x06],a
+	mov	a,[hl+0x23]
+	mov	[hl+0x07],a
+
+	mov	a,[hl+0x24]
+	mov	[hl+0x10],a
+	mov	a,[hl+0x25]
+	mov	[hl+0x11],a
+	mov	a,[hl+0x26]
+	mov	[hl+0x12],a
+	mov	a,[hl+0x27]
+	mov	[hl+0x13],a
+	mov	a,[hl+0x28]
+	mov	[hl+0x14],a
+	mov	a,[hl+0x29]
+	mov	[hl+0x15],a
+	mov	a,[hl+0x2a]
+	mov	[hl+0x16],a
+	mov	a,[hl+0x2b]
+	mov	[hl+0x17],a
+
+	mov	a,[hl+0x07]
+	and	a,#0x80
+	bz	00201$
+	mov	a,#0x01
+	mov	[hl+0x19],a
+	mov	a,[hl+0x00]
+	xor	a,#0xff
+	add	a,#0x01
+	mov	[hl+0x00],a
+	mov	a,[hl+0x01]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x01],a
+	mov	a,[hl+0x02]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x02],a
+	mov	a,[hl+0x03]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x03],a
+	mov	a,[hl+0x04]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x04],a
+	mov	a,[hl+0x05]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x05],a
+	mov	a,[hl+0x06]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x06],a
+	mov	a,[hl+0x07]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x07],a
+
+00201$:
+	mov	a,[hl+0x17]
+	and	a,#0x80
+	bz	00203$
+	mov	a,[hl+0x10]
+	xor	a,#0xff
+	add	a,#0x01
+	mov	[hl+0x10],a
+	mov	a,[hl+0x11]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x11],a
+	mov	a,[hl+0x12]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x12],a
+	mov	a,[hl+0x13]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x13],a
+	mov	a,[hl+0x14]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x14],a
+	mov	a,[hl+0x15]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x15],a
+	mov	a,[hl+0x16]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x16],a
+	mov	a,[hl+0x17]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x17],a
+
+	mov	a,[hl+0x18]
+	cmp	a,#0x00
+	bnz	00203$
+	mov	a,[hl+0x19]
+	xor	a,#0x01
+	mov	[hl+0x19],a
+
+00203$:
+	mov	a,#0x00
+	mov	[hl+0x08],a
+	mov	[hl+0x09],a
+	mov	[hl+0x0a],a
+	mov	[hl+0x0b],a
+	mov	[hl+0x0c],a
+	mov	[hl+0x0d],a
+	mov	[hl+0x0e],a
+	mov	[hl+0x0f],a
+
+	mov	a,#0x40
+	mov	b,a
+
+00204$:
+	clr1	cy
+	mov	a,[hl+0x00]
+	rolc	a,1
+	mov	[hl+0x00],a
+	mov	a,[hl+0x01]
+	rolc	a,1
+	mov	[hl+0x01],a
+	mov	a,[hl+0x02]
+	rolc	a,1
+	mov	[hl+0x02],a
+	mov	a,[hl+0x03]
+	rolc	a,1
+	mov	[hl+0x03],a
+	mov	a,[hl+0x04]
+	rolc	a,1
+	mov	[hl+0x04],a
+	mov	a,[hl+0x05]
+	rolc	a,1
+	mov	[hl+0x05],a
+	mov	a,[hl+0x06]
+	rolc	a,1
+	mov	[hl+0x06],a
+	mov	a,[hl+0x07]
+	rolc	a,1
+	mov	[hl+0x07],a
+	mov	a,[hl+0x08]
+	rolc	a,1
+	mov	[hl+0x08],a
+	mov	a,[hl+0x09]
+	rolc	a,1
+	mov	[hl+0x09],a
+	mov	a,[hl+0x0a]
+	rolc	a,1
+	mov	[hl+0x0a],a
+	mov	a,[hl+0x0b]
+	rolc	a,1
+	mov	[hl+0x0b],a
+	mov	a,[hl+0x0c]
+	rolc	a,1
+	mov	[hl+0x0c],a
+	mov	a,[hl+0x0d]
+	rolc	a,1
+	mov	[hl+0x0d],a
+	mov	a,[hl+0x0e]
+	rolc	a,1
+	mov	[hl+0x0e],a
+	mov	a,[hl+0x0f]
+	rolc	a,1
+	mov	[hl+0x0f],a
+
+	mov	a,[hl+0x0f]
+	cmp	a,[hl+0x17]
+	bc	00205$
+	bnz	00206$
+	mov	a,[hl+0x0e]
+	cmp	a,[hl+0x16]
+	bc	00205$
+	bnz	00206$
+	mov	a,[hl+0x0d]
+	cmp	a,[hl+0x15]
+	bc	00205$
+	bnz	00206$
+	mov	a,[hl+0x0c]
+	cmp	a,[hl+0x14]
+	bc	00205$
+	bnz	00206$
+	mov	a,[hl+0x0b]
+	cmp	a,[hl+0x13]
+	bc	00205$
+	bnz	00206$
+	mov	a,[hl+0x0a]
+	cmp	a,[hl+0x12]
+	bc	00205$
+	bnz	00206$
+	mov	a,[hl+0x09]
+	cmp	a,[hl+0x11]
+	bc	00205$
+	bnz	00206$
+	mov	a,[hl+0x08]
+	cmp	a,[hl+0x10]
+	bc	00205$
+
+00206$:
+	mov	a,[hl+0x08]
+	sub	a,[hl+0x10]
+	mov	[hl+0x08],a
+	mov	a,[hl+0x09]
+	subc	a,[hl+0x11]
+	mov	[hl+0x09],a
+	mov	a,[hl+0x0a]
+	subc	a,[hl+0x12]
+	mov	[hl+0x0a],a
+	mov	a,[hl+0x0b]
+	subc	a,[hl+0x13]
+	mov	[hl+0x0b],a
+	mov	a,[hl+0x0c]
+	subc	a,[hl+0x14]
+	mov	[hl+0x0c],a
+	mov	a,[hl+0x0d]
+	subc	a,[hl+0x15]
+	mov	[hl+0x0d],a
+	mov	a,[hl+0x0e]
+	subc	a,[hl+0x16]
+	mov	[hl+0x0e],a
+	mov	a,[hl+0x0f]
+	subc	a,[hl+0x17]
+	mov	[hl+0x0f],a
+	mov	a,[hl+0x00]
+	or	a,#0x01
+	mov	[hl+0x00],a
+
+00205$:
+	dbnz	b,00211$
+	br	!00212$
+00211$:
+	br	!00204$
+
+00212$:
+	mov	a,[hl+0x18]
+	cmp	a,#0x00
+	bnz	00208$
+
+	mov	a,[hl+0x19]
+	cmp	a,#0x00
+	bz	00207$
+	mov	a,[hl+0x00]
+	xor	a,#0xff
+	add	a,#0x01
+	mov	[hl+0x00],a
+	mov	a,[hl+0x01]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x01],a
+	mov	a,[hl+0x02]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x02],a
+	mov	a,[hl+0x03]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x03],a
+	mov	a,[hl+0x04]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x04],a
+	mov	a,[hl+0x05]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x05],a
+	mov	a,[hl+0x06]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x06],a
+	mov	a,[hl+0x07]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x07],a
+
+00207$:
+	mov	a,[hl+0x02]
+	mov	!___SDCC_k78k0_ret2,a
+	mov	a,[hl+0x03]
+	mov	!___SDCC_k78k0_ret3,a
+	mov	a,[hl+0x04]
+	mov	!___SDCC_k78k0_ret4,a
+	mov	a,[hl+0x05]
+	mov	!___SDCC_k78k0_ret5,a
+	mov	a,[hl+0x06]
+	mov	!___SDCC_k78k0_ret6,a
+	mov	a,[hl+0x07]
+	mov	!___SDCC_k78k0_ret7,a
+	mov	a,[hl+0x02]
+	mov	c,a
+	mov	a,[hl+0x03]
+	mov	b,a
+	mov	a,[hl+0x00]
+	mov	x,a
+	mov	a,[hl+0x01]
+	br	!00210$
+
+00208$:
+	mov	a,[hl+0x19]
+	cmp	a,#0x00
+	bz	00209$
+	mov	a,[hl+0x08]
+	xor	a,#0xff
+	add	a,#0x01
+	mov	[hl+0x08],a
+	mov	a,[hl+0x09]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x09],a
+	mov	a,[hl+0x0a]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x0a],a
+	mov	a,[hl+0x0b]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x0b],a
+	mov	a,[hl+0x0c]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x0c],a
+	mov	a,[hl+0x0d]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x0d],a
+	mov	a,[hl+0x0e]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x0e],a
+	mov	a,[hl+0x0f]
+	xor	a,#0xff
+	addc	a,#0x00
+	mov	[hl+0x0f],a
+
+00209$:
+	mov	a,[hl+0x0a]
+	mov	!___SDCC_k78k0_ret2,a
+	mov	a,[hl+0x0b]
+	mov	!___SDCC_k78k0_ret3,a
+	mov	a,[hl+0x0c]
+	mov	!___SDCC_k78k0_ret4,a
+	mov	a,[hl+0x0d]
+	mov	!___SDCC_k78k0_ret5,a
+	mov	a,[hl+0x0e]
+	mov	!___SDCC_k78k0_ret6,a
+	mov	a,[hl+0x0f]
+	mov	!___SDCC_k78k0_ret7,a
+	mov	a,[hl+0x0a]
+	mov	c,a
+	mov	a,[hl+0x0b]
+	mov	b,a
+	mov	a,[hl+0x08]
+	mov	x,a
+	mov	a,[hl+0x09]
+
+00210$:
+	xch	a,x
+	mov	[hl+0x00],a
+	xch	a,x
+	mov	[hl+0x01],a
+	movw	ax,sp
+	movw	hl,ax
+	mov	a,[hl+0x00]
+	mov	x,a
+	mov	a,[hl+0x01]
+	movw	de,ax
+	mov	a,[hl+0x1d]
+	mov	[hl+0x2d],a
+	mov	a,[hl+0x1c]
+	mov	[hl+0x2c],a
+	movw	ax,sp
+	addw	ax,#0x002c
+	movw	sp,ax
+	mov	a,[hl+0x02]
+	mov	x,a
+	mov	a,[hl+0x03]
+	ret

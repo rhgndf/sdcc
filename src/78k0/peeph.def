@@ -1,0 +1,85 @@
+// Remove the second half of register round-trips. MOV and MOVW do not alter flags.
+
+replace {
+	mov	a,x
+	mov	x,a
+} by {
+	mov	a,x
+}
+
+replace {
+	mov	x,a
+	mov	a,x
+} by {
+	mov	x,a
+}
+
+replace {
+	mov	a,b
+	mov	b,a
+} by {
+	mov	a,b
+}
+
+replace {
+	mov	b,a
+	mov	a,b
+} by {
+	mov	b,a
+}
+
+replace {
+	mov	a,c
+	mov	c,a
+} by {
+	mov	a,c
+}
+
+replace {
+	mov	c,a
+	mov	a,c
+} by {
+	mov	c,a
+}
+
+replace {
+	movw	ax,bc
+	movw	bc,ax
+} by {
+	movw	ax,bc
+}
+
+replace {
+	movw	bc,ax
+	movw	ax,bc
+} by {
+	movw	bc,ax
+}
+
+replace {
+	movw	ax,de
+	movw	de,ax
+} by {
+	movw	ax,de
+}
+
+replace {
+	movw	de,ax
+	movw	ax,de
+} by {
+	movw	de,ax
+}
+
+replace {
+	movw	ax,hl
+	movw	hl,ax
+} by {
+	movw	ax,hl
+}
+
+replace {
+	movw	hl,ax
+	movw	ax,hl
+} by {
+	movw	hl,ax
+}

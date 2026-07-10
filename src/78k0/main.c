@@ -40,7 +40,9 @@ static char *k78k0_keywords[] = {
   0
 };
 
-static char k78k0_defaultRules[] = "";
+static char k78k0_defaultRules[] = {
+#include "peeph.rul"
+};
 
 static struct
 {

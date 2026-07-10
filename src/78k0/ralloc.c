@@ -210,6 +210,9 @@ k78k0_assignRegisters (ebbIndex *ebbi)
         }
     }
 
+  if (options.dump_i_code)
+    dumpEbbsToFileExt (DUMP_RASSGN, ebbi);
+
   gen78K0Code (ebbi);
   spill_slot_id = 0;
 }

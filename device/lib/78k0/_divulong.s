@@ -28,8 +28,6 @@
 
 	.globl __divulong
 	.globl __modulong
-	.globl ___SDCC_k78k0_ret2
-	.globl ___SDCC_k78k0_ret3
 
 	.area CODE
 
@@ -153,33 +151,19 @@ __divmodulong:
 	cmp	a,#0x00
 	bnz	00004$
 
-	mov	a,[hl+0x02]
-	mov	!___SDCC_k78k0_ret2,a
-	mov	c,a
-	mov	a,[hl+0x03]
-	mov	!___SDCC_k78k0_ret3,a
-	mov	b,a
-	mov	a,[hl+0x00]
-	mov	x,a
-	mov	a,[hl+0x01]
 	br	!00005$
 
 00004$:
-	mov	a,[hl+0x06]
-	mov	!___SDCC_k78k0_ret2,a
-	mov	c,a
-	mov	a,[hl+0x07]
-	mov	!___SDCC_k78k0_ret3,a
-	mov	b,a
 	mov	a,[hl+0x04]
-	mov	x,a
+	mov	[hl+0x00],a
 	mov	a,[hl+0x05]
+	mov	[hl+0x01],a
+	mov	a,[hl+0x06]
+	mov	[hl+0x02],a
+	mov	a,[hl+0x07]
+	mov	[hl+0x03],a
 
 00005$:
-	mov	[hl+0x01],a
-	mov	a,x
-	mov	[hl+0x00],a
-
 	mov	a,[hl+0x0d]
 	mov	x,a
 	mov	a,[hl+0x0e]
@@ -197,9 +181,9 @@ __divmodulong:
 	movw	ax,sp
 	addw	ax,#0x0015
 	movw	sp,ax
-	mov	a,!___SDCC_k78k0_ret2
+	mov	a,[hl+0x02]
 	mov	c,a
-	mov	a,!___SDCC_k78k0_ret3
+	mov	a,[hl+0x03]
 	mov	b,a
 	mov	a,[hl+0x00]
 	mov	x,a

@@ -27,8 +27,6 @@
 ;--------------------------------------------------------------------------
 
 	.globl __mullong
-	.globl ___SDCC_k78k0_ret2
-	.globl ___SDCC_k78k0_ret3
 
 	.area CODE
 
@@ -119,13 +117,6 @@ __mullong:
 
 	dbnz	b,00001$
 
-	mov	a,[hl+0x0a]
-	mov	!___SDCC_k78k0_ret2,a
-	mov	c,a
-	mov	a,[hl+0x0b]
-	mov	!___SDCC_k78k0_ret3,a
-	mov	b,a
-
 	mov	a,[hl+0x0c]
 	mov	x,a
 	mov	a,[hl+0x0d]
@@ -143,9 +134,9 @@ __mullong:
 	movw	ax,sp
 	addw	ax,#0x0014
 	movw	sp,ax
-	mov	a,!___SDCC_k78k0_ret2
+	mov	a,[hl+0x0a]
 	mov	c,a
-	mov	a,!___SDCC_k78k0_ret3
+	mov	a,[hl+0x0b]
 	mov	b,a
 	mov	a,[hl+0x08]
 	mov	x,a

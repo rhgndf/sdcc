@@ -28,8 +28,6 @@
 
 	.globl __divslong
 	.globl __modslong
-	.globl ___SDCC_k78k0_ret2
-	.globl ___SDCC_k78k0_ret3
 
 	.area CODE
 
@@ -227,15 +225,6 @@ __divmodslong:
 	mov	[hl+0x03],a
 
 00007$:
-	mov	a,[hl+0x02]
-	mov	!___SDCC_k78k0_ret2,a
-	mov	c,a
-	mov	a,[hl+0x03]
-	mov	!___SDCC_k78k0_ret3,a
-	mov	b,a
-	mov	a,[hl+0x00]
-	mov	x,a
-	mov	a,[hl+0x01]
 	br	!00010$
 
 00008$:
@@ -260,21 +249,16 @@ __divmodslong:
 	mov	[hl+0x07],a
 
 00009$:
-	mov	a,[hl+0x06]
-	mov	!___SDCC_k78k0_ret2,a
-	mov	c,a
-	mov	a,[hl+0x07]
-	mov	!___SDCC_k78k0_ret3,a
-	mov	b,a
 	mov	a,[hl+0x04]
-	mov	x,a
+	mov	[hl+0x00],a
 	mov	a,[hl+0x05]
+	mov	[hl+0x01],a
+	mov	a,[hl+0x06]
+	mov	[hl+0x02],a
+	mov	a,[hl+0x07]
+	mov	[hl+0x03],a
 
 00010$:
-	mov	[hl+0x01],a
-	mov	a,x
-	mov	[hl+0x00],a
-
 	mov	a,[hl+0x0e]
 	mov	x,a
 	mov	a,[hl+0x0f]
@@ -292,9 +276,9 @@ __divmodslong:
 	movw	ax,sp
 	addw	ax,#0x0016
 	movw	sp,ax
-	mov	a,!___SDCC_k78k0_ret2
+	mov	a,[hl+0x02]
 	mov	c,a
-	mov	a,!___SDCC_k78k0_ret3
+	mov	a,[hl+0x03]
 	mov	b,a
 	mov	a,[hl+0x00]
 	mov	x,a

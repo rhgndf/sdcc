@@ -30,7 +30,7 @@ K78K0_SDCC = $(filter-out _memcmp.c _memset.c,$(COMMON_SDCC)) \
 
 K78K0_OBJECTS = $(patsubst %.c,%.rel,$(K78K0_FLOAT) $(K78K0_LONGLONG) $(K78K0_SDCC))
 
-OBJ = __sdcc_regs.rel setjmp.rel heap.rel _memcmp.rel _memcpy.rel _memset.rel _strlen.rel _strnlen.rel _mulchar.rel _mulint.rel _mulint2long.rel _mullong.rel _mullonglong.rel _divchar.rel _divuint.rel _divsint.rel _divulong.rel _divslong.rel _divlonglong.rel
+OBJ = setjmp.rel heap.rel _memcmp.rel _memcpy.rel _memset.rel _strlen.rel _strnlen.rel _mulchar.rel _mulint.rel _mulint2long.rel _mullong.rel _mullonglong.rel _divchar.rel _divuint.rel _divsint.rel _divulong.rel _divslong.rel _divlonglong.rel
 LIB = 78k0.lib
 CC = $(SCC)
 AS = $(SAS)

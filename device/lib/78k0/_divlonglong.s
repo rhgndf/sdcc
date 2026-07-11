@@ -30,12 +30,6 @@
 	.globl __modulonglong
 	.globl __divslonglong
 	.globl __modslonglong
-	.globl ___SDCC_k78k0_ret2
-	.globl ___SDCC_k78k0_ret3
-	.globl ___SDCC_k78k0_ret4
-	.globl ___SDCC_k78k0_ret5
-	.globl ___SDCC_k78k0_ret6
-	.globl ___SDCC_k78k0_ret7
 
 	.area CODE
 
@@ -57,21 +51,21 @@ __divmodulonglong:
 	mov	a,c
 	mov	[hl+0x18],a
 
-	mov	a,[hl+0x1b]
-	mov	[hl+0x00],a
-	mov	a,[hl+0x1c]
-	mov	[hl+0x01],a
 	mov	a,[hl+0x1d]
-	mov	[hl+0x02],a
+	mov	[hl+0x00],a
 	mov	a,[hl+0x1e]
-	mov	[hl+0x03],a
+	mov	[hl+0x01],a
 	mov	a,[hl+0x1f]
-	mov	[hl+0x04],a
+	mov	[hl+0x02],a
 	mov	a,[hl+0x20]
-	mov	[hl+0x05],a
+	mov	[hl+0x03],a
 	mov	a,[hl+0x21]
-	mov	[hl+0x06],a
+	mov	[hl+0x04],a
 	mov	a,[hl+0x22]
+	mov	[hl+0x05],a
+	mov	a,[hl+0x23]
+	mov	[hl+0x06],a
+	mov	a,[hl+0x24]
 	mov	[hl+0x07],a
 
 	mov	a,#0x00
@@ -84,21 +78,21 @@ __divmodulonglong:
 	mov	[hl+0x0e],a
 	mov	[hl+0x0f],a
 
-	mov	a,[hl+0x23]
-	mov	[hl+0x10],a
-	mov	a,[hl+0x24]
-	mov	[hl+0x11],a
 	mov	a,[hl+0x25]
-	mov	[hl+0x12],a
+	mov	[hl+0x10],a
 	mov	a,[hl+0x26]
-	mov	[hl+0x13],a
+	mov	[hl+0x11],a
 	mov	a,[hl+0x27]
-	mov	[hl+0x14],a
+	mov	[hl+0x12],a
 	mov	a,[hl+0x28]
-	mov	[hl+0x15],a
+	mov	[hl+0x13],a
 	mov	a,[hl+0x29]
-	mov	[hl+0x16],a
+	mov	[hl+0x14],a
 	mov	a,[hl+0x2a]
+	mov	[hl+0x15],a
+	mov	a,[hl+0x2b]
+	mov	[hl+0x16],a
+	mov	a,[hl+0x2c]
 	mov	[hl+0x17],a
 
 	mov	a,#0x40
@@ -226,54 +220,33 @@ __divmodulonglong:
 	mov	a,[hl+0x18]
 	cmp	a,#0x00
 	bnz	00104$
-
-	mov	a,[hl+0x02]
-	mov	!___SDCC_k78k0_ret2,a
-	mov	a,[hl+0x03]
-	mov	!___SDCC_k78k0_ret3,a
-	mov	a,[hl+0x04]
-	mov	!___SDCC_k78k0_ret4,a
-	mov	a,[hl+0x05]
-	mov	!___SDCC_k78k0_ret5,a
-	mov	a,[hl+0x06]
-	mov	!___SDCC_k78k0_ret6,a
-	mov	a,[hl+0x07]
-	mov	!___SDCC_k78k0_ret7,a
-	mov	a,[hl+0x02]
-	mov	c,a
-	mov	a,[hl+0x03]
-	mov	b,a
-	mov	a,[hl+0x00]
-	mov	x,a
-	mov	a,[hl+0x01]
+	movw	ax,hl
+	movw	de,ax
 	br	!00105$
 
 00104$:
-	mov	a,[hl+0x0a]
-	mov	!___SDCC_k78k0_ret2,a
-	mov	a,[hl+0x0b]
-	mov	!___SDCC_k78k0_ret3,a
-	mov	a,[hl+0x0c]
-	mov	!___SDCC_k78k0_ret4,a
-	mov	a,[hl+0x0d]
-	mov	!___SDCC_k78k0_ret5,a
-	mov	a,[hl+0x0e]
-	mov	!___SDCC_k78k0_ret6,a
-	mov	a,[hl+0x0f]
-	mov	!___SDCC_k78k0_ret7,a
-	mov	a,[hl+0x0a]
-	mov	c,a
-	mov	a,[hl+0x0b]
-	mov	b,a
-	mov	a,[hl+0x08]
-	mov	x,a
-	mov	a,[hl+0x09]
+	movw	ax,hl
+	addw	ax,#0x0008
+	movw	de,ax
 
 00105$:
-	xch	a,x
-	mov	[hl+0x00],a
-	xch	a,x
-	mov	[hl+0x01],a
+	; Copy the selected result to the caller-provided return destination.
+	mov	a,[hl+0x1b]
+	mov	x,a
+	mov	a,[hl+0x1c]
+	movw	bc,ax
+	movw	ax,bc
+	movw	hl,ax
+	mov	a,#0x08
+	mov	b,a
+00108$:
+	mov	a,[de]
+	mov	[hl],a
+	incw	de
+	incw	hl
+	dbnz	b,00108$
+
+	; Restore DE and move the return address over the hidden pointer and arguments.
 	movw	ax,sp
 	movw	hl,ax
 	mov	a,[hl+0x00]
@@ -281,15 +254,12 @@ __divmodulonglong:
 	mov	a,[hl+0x01]
 	movw	de,ax
 	mov	a,[hl+0x1c]
-	mov	[hl+0x2c],a
+	mov	[hl+0x2e],a
 	mov	a,[hl+0x1b]
-	mov	[hl+0x2b],a
+	mov	[hl+0x2d],a
 	movw	ax,sp
-	addw	ax,#0x002b
+	addw	ax,#0x002d
 	movw	sp,ax
-	mov	a,[hl+0x02]
-	mov	x,a
-	mov	a,[hl+0x03]
 	ret
 
 __divslonglong:
@@ -312,38 +282,38 @@ __divmodslonglong:
 	mov	a,#0x00
 	mov	[hl+0x19],a
 
-	mov	a,[hl+0x1c]
-	mov	[hl+0x00],a
-	mov	a,[hl+0x1d]
-	mov	[hl+0x01],a
 	mov	a,[hl+0x1e]
-	mov	[hl+0x02],a
+	mov	[hl+0x00],a
 	mov	a,[hl+0x1f]
-	mov	[hl+0x03],a
+	mov	[hl+0x01],a
 	mov	a,[hl+0x20]
-	mov	[hl+0x04],a
+	mov	[hl+0x02],a
 	mov	a,[hl+0x21]
-	mov	[hl+0x05],a
+	mov	[hl+0x03],a
 	mov	a,[hl+0x22]
-	mov	[hl+0x06],a
+	mov	[hl+0x04],a
 	mov	a,[hl+0x23]
+	mov	[hl+0x05],a
+	mov	a,[hl+0x24]
+	mov	[hl+0x06],a
+	mov	a,[hl+0x25]
 	mov	[hl+0x07],a
 
-	mov	a,[hl+0x24]
-	mov	[hl+0x10],a
-	mov	a,[hl+0x25]
-	mov	[hl+0x11],a
 	mov	a,[hl+0x26]
-	mov	[hl+0x12],a
+	mov	[hl+0x10],a
 	mov	a,[hl+0x27]
-	mov	[hl+0x13],a
+	mov	[hl+0x11],a
 	mov	a,[hl+0x28]
-	mov	[hl+0x14],a
+	mov	[hl+0x12],a
 	mov	a,[hl+0x29]
-	mov	[hl+0x15],a
+	mov	[hl+0x13],a
 	mov	a,[hl+0x2a]
-	mov	[hl+0x16],a
+	mov	[hl+0x14],a
 	mov	a,[hl+0x2b]
+	mov	[hl+0x15],a
+	mov	a,[hl+0x2c]
+	mov	[hl+0x16],a
+	mov	a,[hl+0x2d]
 	mov	[hl+0x17],a
 
 	mov	a,[hl+0x07]
@@ -602,25 +572,8 @@ __divmodslonglong:
 	mov	[hl+0x07],a
 
 00207$:
-	mov	a,[hl+0x02]
-	mov	!___SDCC_k78k0_ret2,a
-	mov	a,[hl+0x03]
-	mov	!___SDCC_k78k0_ret3,a
-	mov	a,[hl+0x04]
-	mov	!___SDCC_k78k0_ret4,a
-	mov	a,[hl+0x05]
-	mov	!___SDCC_k78k0_ret5,a
-	mov	a,[hl+0x06]
-	mov	!___SDCC_k78k0_ret6,a
-	mov	a,[hl+0x07]
-	mov	!___SDCC_k78k0_ret7,a
-	mov	a,[hl+0x02]
-	mov	c,a
-	mov	a,[hl+0x03]
-	mov	b,a
-	mov	a,[hl+0x00]
-	mov	x,a
-	mov	a,[hl+0x01]
+	movw	ax,hl
+	movw	de,ax
 	br	!00210$
 
 00208$:
@@ -661,31 +614,28 @@ __divmodslonglong:
 	mov	[hl+0x0f],a
 
 00209$:
-	mov	a,[hl+0x0a]
-	mov	!___SDCC_k78k0_ret2,a
-	mov	a,[hl+0x0b]
-	mov	!___SDCC_k78k0_ret3,a
-	mov	a,[hl+0x0c]
-	mov	!___SDCC_k78k0_ret4,a
-	mov	a,[hl+0x0d]
-	mov	!___SDCC_k78k0_ret5,a
-	mov	a,[hl+0x0e]
-	mov	!___SDCC_k78k0_ret6,a
-	mov	a,[hl+0x0f]
-	mov	!___SDCC_k78k0_ret7,a
-	mov	a,[hl+0x0a]
-	mov	c,a
-	mov	a,[hl+0x0b]
-	mov	b,a
-	mov	a,[hl+0x08]
-	mov	x,a
-	mov	a,[hl+0x09]
+	movw	ax,hl
+	addw	ax,#0x0008
+	movw	de,ax
 
 00210$:
-	xch	a,x
-	mov	[hl+0x00],a
-	xch	a,x
-	mov	[hl+0x01],a
+	; Copy the selected result to the caller-provided return destination.
+	mov	a,[hl+0x1c]
+	mov	x,a
+	mov	a,[hl+0x1d]
+	movw	bc,ax
+	movw	ax,bc
+	movw	hl,ax
+	mov	a,#0x08
+	mov	b,a
+00213$:
+	mov	a,[de]
+	mov	[hl],a
+	incw	de
+	incw	hl
+	dbnz	b,00213$
+
+	; Restore DE and move the return address over the hidden pointer and arguments.
 	movw	ax,sp
 	movw	hl,ax
 	mov	a,[hl+0x00]
@@ -693,13 +643,10 @@ __divmodslonglong:
 	mov	a,[hl+0x01]
 	movw	de,ax
 	mov	a,[hl+0x1d]
-	mov	[hl+0x2d],a
+	mov	[hl+0x2f],a
 	mov	a,[hl+0x1c]
-	mov	[hl+0x2c],a
+	mov	[hl+0x2e],a
 	movw	ax,sp
-	addw	ax,#0x002c
+	addw	ax,#0x002e
 	movw	sp,ax
-	mov	a,[hl+0x02]
-	mov	x,a
-	mov	a,[hl+0x03]
 	ret

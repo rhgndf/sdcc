@@ -25,7 +25,7 @@ static int hl_sp_offset = 0;
 static int stack_pushed = 0;
 static int local_stack_size = 0;
 static int current_return_size = 0;
-static bool current_return_is_struct = false;
+static bool current_return_via_hidden_pointer = false;
 static int current_param_offset = 0;
 static int current_stack_cleanup_size = 0;
 static bool current_function_is_isr = false;
@@ -424,7 +424,7 @@ operandLitValueBits (const operand *op)
 }
 
 static bool
-typeReturnsStruct (sym_link *type)
+typeReturnsViaHiddenPointer (sym_link *type)
 {
   sym_link *ftype;
 
@@ -432,7 +432,7 @@ typeReturnsStruct (sym_link *type)
     return false;
 
   ftype = IS_FUNCPTR (type) ? type->next : type;
-  return ftype && ftype->next && IS_STRUCT (ftype->next);
+  return ftype && ftype->next && (IS_STRUCT (ftype->next) || getSize (ftype->next) > 4);
 }
 
 static void
@@ -718,14 +718,14 @@ restoreScalarAcrossStackAdjustment (const int size)
 static void
 saveCurrentReturnAcrossStackAdjustment (void)
 {
-  if (!current_return_is_struct)
+  if (!current_return_via_hidden_pointer)
     saveScalarAcrossStackAdjustment (current_return_size);
 }
 
 static void
 restoreCurrentReturnAcrossStackAdjustment (void)
 {
-  if (!current_return_is_struct)
+  if (!current_return_via_hidden_pointer)
     restoreScalarAcrossStackAdjustment (current_return_size);
 }
 
@@ -735,7 +735,7 @@ resetFunctionState (void)
   stack_pushed = 0;
   local_stack_size = 0;
   current_return_size = 0;
-  current_return_is_struct = false;
+  current_return_via_hidden_pointer = false;
   current_param_offset = 0;
   current_stack_cleanup_size = 0;
   current_function_is_isr = false;
@@ -764,7 +764,7 @@ functionStackCleanupBytes (sym_link *ftype)
   if (!ftype || !IS_FUNC (ftype) || FUNC_HASVARARGS (ftype))
     return 0;
 
-  if (typeReturnsStruct (ftype))
+  if (typeReturnsViaHiddenPointer (ftype))
     bytes += 2;
 
   for (value *arg = FUNC_ARGS (ftype); arg; arg = arg->next)
@@ -817,8 +817,8 @@ genFunction (const iCode *ic)
   local_stack_size = frame_local_size + K78K0_PRESERVED_DE_BYTES;
   current_return_size = sym->type && sym->type->next && !IS_VOID (sym->type->next) ?
     getSize (sym->type->next) : 0;
-  current_return_is_struct = typeReturnsStruct (sym->type);
-  current_param_offset = current_return_is_struct ? 2 : 0;
+  current_return_via_hidden_pointer = typeReturnsViaHiddenPointer (sym->type);
+  current_param_offset = current_return_via_hidden_pointer ? 2 : 0;
   current_stack_cleanup_size = functionStackCleanupBytes (sym->type);
   current_function_is_isr = IFFUNC_ISISR (sym->type);
   emit2 ("", "%s:", sym->rname);
@@ -2790,7 +2790,7 @@ genCall (const iCode *ic)
 {
   operand *left = IC_LEFT (ic);
   operand *result = IC_RESULT (ic);
-  const bool bigreturn = typeReturnsStruct (operandType (left));
+  const bool bigreturn = typeReturnsViaHiddenPointer (operandType (left));
   sym_link *ftype = IS_FUNCPTR (operandType (left)) ? operandType (left)->next : operandType (left);
   int first_regarg_size = 0;
   int result_size = 0;
@@ -2805,7 +2805,7 @@ genCall (const iCode *ic)
     {
       first_regarg_size = functionFirstRegArgSize (ftype);
       saveScalarToReturnMirror (first_regarg_size);
-      wassertl (result, "78K0 struct-return call has no destination.");
+      wassertl (result, "78K0 large-return call has no destination.");
       if (!pushBigReturnAddress (result))
         return false;
       restoreScalarFromReturnMirror (first_regarg_size);
@@ -2839,7 +2839,7 @@ genPcall (const iCode *ic)
 {
   operand *left = IC_LEFT (ic);
   operand *result = IC_RESULT (ic);
-  const bool bigreturn = typeReturnsStruct (operandType (left));
+  const bool bigreturn = typeReturnsViaHiddenPointer (operandType (left));
   sym_link *ftype = IS_FUNCPTR (operandType (left)) ? operandType (left)->next : operandType (left);
   char return_label[32];
   int first_regarg_size = 0;
@@ -2854,7 +2854,7 @@ genPcall (const iCode *ic)
 
   if (bigreturn)
     {
-      wassertl (result, "78K0 struct-return indirect call has no destination.");
+      wassertl (result, "78K0 large-return indirect call has no destination.");
       if (!pushBigReturnAddress (result))
         return false;
     }
@@ -4722,13 +4722,54 @@ genReceive (const iCode *ic)
 }
 
 static bool
-copyStructReturnToHiddenPointer (const operand *left)
+copyReturnToHiddenPointer (const operand *left)
 {
   const int size = getSize (operandType (left));
   const int pointer_offset = local_stack_size + K78K0_RETURN_ADDRESS_BYTES + stack_pushed;
+  const operand *source = resolveReqvOperand (left);
+  const symbol *storage = IS_SYMOP (source) ? operandStorageSymbol (source) : NULL;
+  char copy_label[32];
 
-  if (!IS_STRUCT (operandType (left)) || pointer_offset < 0 || pointer_offset + 1 > 255)
+  if (size < 1 || pointer_offset < 0)
     return false;
+
+  if (size <= 256 && storage && !operandInReturnValue (source, size) &&
+      (storage->onStack || storage->rname[0]))
+    {
+      if (storage->onStack)
+        {
+          emit2 ("movw", "ax,sp");
+          adjustAX (stackByteOffset (storage, 0));
+        }
+      else
+        emit2 ("movw", "ax,#%s", storage->rname);
+      emit2 ("movw", "de,ax");
+
+      setHLToStackOffset (pointer_offset);
+      emit2 ("mov", "a,[hl+0x00]");
+      emit2 ("mov", "x,a");
+      emit2 ("mov", "a,[hl+0x01]");
+      emit2 ("movw", "hl,ax");
+
+      emit2 ("mov", "a,#0x%02x", (unsigned)(size & 0xff));
+      emit2 ("mov", "b,a");
+      makeLocalLabel (copy_label, sizeof (copy_label));
+      emitLocalLabel (copy_label);
+      emit2 ("mov", "a,[de]");
+      emit2 ("mov", "[hl],a");
+      emit2 ("incw", "de");
+      emit2 ("incw", "hl");
+      emit2 ("dbnz", "b,%s", copy_label);
+
+      clearRegisterState ();
+      return true;
+    }
+
+  setHLToStackOffset (pointer_offset);
+  emit2 ("mov", "a,[hl+0x00]");
+  emit2 ("mov", "x,a");
+  emit2 ("mov", "a,[hl+0x01]");
+  emit2 ("movw", "de,ax");
 
   for (int offset = 0; offset < size; offset++)
     {
@@ -4736,16 +4777,20 @@ copyStructReturnToHiddenPointer (const operand *left)
         return false;
 
       emit2 ("mov", "b,a");
-      setHLToSP ();
-      emit2 ("mov", "a,[hl+0x%02x]", (unsigned)pointer_offset);
-      emit2 ("mov", "x,a");
-      emit2 ("mov", "a,[hl+0x%02x]", (unsigned)(pointer_offset + 1));
-      if (offset)
-        adjustAX (offset);
-      emit2 ("movw", "hl,ax");
-      clearHLState ();
-      emit2 ("mov", "a,b");
-      emit2 ("mov", "[hl+0x00],a");
+      if (offset <= 255)
+        {
+          setHLFromDE ();
+          emit2 ("mov", "a,b");
+          emit2 ("mov", "[hl+0x%02x],a", (unsigned)offset);
+        }
+      else
+        {
+          emit2 ("movw", "ax,de");
+          adjustAX (offset);
+          emit2 ("movw", "hl,ax");
+          emit2 ("mov", "a,b");
+          emit2 ("mov", "[hl],a");
+        }
       clearHLState ();
     }
 
@@ -4758,13 +4803,13 @@ genReturn (const iCode *ic)
 {
   char label[32];
 
-  if (IC_LEFT (ic) && (current_return_is_struct || current_return_size > 0))
+  if (IC_LEFT (ic) && (current_return_via_hidden_pointer || current_return_size > 0))
     {
-      if (IS_STRUCT (operandType (IC_LEFT (ic))))
+      if (current_return_via_hidden_pointer)
         {
-          if (!copyStructReturnToHiddenPointer (IC_LEFT (ic)))
+          if (!copyReturnToHiddenPointer (IC_LEFT (ic)))
             {
-              wassertl (0, "78K0 struct return operand is not implemented yet.");
+              wassertl (0, "78K0 large return operand is not implemented yet.");
               return;
             }
         }

@@ -219,10 +219,7 @@ static void
 setHLToSP (void)
 {
   if (hl_is_sp)
-    {
-      clearRegisterState ();
-      return;
-    }
+    return;
 
   clearRegisterState ();
   emit2 ("movw", "ax,sp");
@@ -236,10 +233,7 @@ static void
 ensureHLToSPPreservingA (const char *scratch)
 {
   if (hl_is_sp)
-    {
-      clearRegisterState ();
-      return;
-    }
+    return;
 
   emit2 ("mov", "%s,a", scratch);
   setHLToSP ();
@@ -252,10 +246,7 @@ ensureHLToSPPreservingAX (void)
   emit2 ("movw", "de,ax");
 
   if (hl_is_sp)
-    {
-      clearRegisterState ();
-      return;
-    }
+    return;
 
   setHLToSP ();
   emit2 ("movw", "ax,de");
@@ -2364,6 +2355,43 @@ genBooleanResult (const operand *result, const char *true_label, const char *don
     }
 }
 
+static void
+prepareComparisonLabels (iCode *ifx, char *true_label, char *false_label, char *done_label, size_t label_size)
+{
+  if (!ifx)
+    {
+      makeLocalLabel (true_label, label_size);
+      makeLocalLabel (false_label, label_size);
+      makeLocalLabel (done_label, label_size);
+    }
+  else if (IC_TRUE (ifx))
+    {
+      makeICLabel (true_label, label_size, IC_TRUE (ifx));
+      makeLocalLabel (false_label, label_size);
+    }
+  else
+    {
+      wassertl (IC_FALSE (ifx), "78K0 comparison IFX has no target.");
+      makeLocalLabel (true_label, label_size);
+      makeICLabel (false_label, label_size, IC_FALSE (ifx));
+    }
+}
+
+static void
+finishComparison (const operand *result, iCode *ifx, const char *true_label, const char *false_label,
+                  const char *done_label)
+{
+  if (!ifx)
+    {
+      emitLocalLabel (false_label);
+      genBooleanResult (result, true_label, done_label);
+      return;
+    }
+
+  emitLocalLabel (IC_TRUE (ifx) ? false_label : true_label);
+  ifx->generated = true;
+}
+
 static bool
 genNot (const iCode *ic)
 {
@@ -2381,7 +2409,7 @@ genNot (const iCode *ic)
 }
 
 static bool
-genCmpEqNe (const iCode *ic)
+genCmpEqNe (const iCode *ic, iCode *ifx)
 {
   operand *result = IC_RESULT (ic);
   operand *left = IC_LEFT (ic);
@@ -2399,9 +2427,7 @@ genCmpEqNe (const iCode *ic)
   if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || k78k0_operandSize (right) != size)
     return false;
 
-  makeLocalLabel (true_label, sizeof (true_label));
-  makeLocalLabel (false_label, sizeof (false_label));
-  makeLocalLabel (done_label, sizeof (done_label));
+  prepareComparisonLabels (ifx, true_label, false_label, done_label, sizeof (true_label));
 
   for (int offset = 0; offset < size; offset++)
     {
@@ -2416,13 +2442,12 @@ genCmpEqNe (const iCode *ic)
   if (is_ne)
     emit2 ("br", "!%s", false_label);
 
-  emitLocalLabel (false_label);
-  genBooleanResult (result, true_label, done_label);
+  finishComparison (result, ifx, true_label, false_label, done_label);
   return true;
 }
 
 static bool
-genCmpLtGt (const iCode *ic)
+genCmpLtGt (const iCode *ic, iCode *ifx)
 {
   operand *result = IC_RESULT (ic);
   operand *left = IC_LEFT (ic);
@@ -2448,9 +2473,7 @@ genCmpLtGt (const iCode *ic)
   if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || k78k0_operandSize (right) != size)
     return false;
 
-  makeLocalLabel (true_label, sizeof (true_label));
-  makeLocalLabel (false_label, sizeof (false_label));
-  makeLocalLabel (done_label, sizeof (done_label));
+  prepareComparisonLabels (ifx, true_label, false_label, done_label, sizeof (true_label));
 
   for (int offset = size - 1; offset >= 0; offset--)
     {
@@ -2469,8 +2492,7 @@ genCmpLtGt (const iCode *ic)
 
   emit2 ("br", "!%s", false_label);
 
-  emitLocalLabel (false_label);
-  genBooleanResult (result, true_label, done_label);
+  finishComparison (result, ifx, true_label, false_label, done_label);
   return true;
 }
 
@@ -4317,12 +4339,12 @@ gen78K0iCode (iCode *ic)
 
     case EQ_OP:
     case NE_OP:
-      wassertl (genCmpEqNe (ic), "78K0 equality comparison is not implemented yet.");
+      wassertl (genCmpEqNe (ic, ifxForOp (IC_RESULT (ic), ic)), "78K0 equality comparison is not implemented yet.");
       break;
 
     case '<':
     case '>':
-      wassertl (genCmpLtGt (ic), "78K0 ordering comparison is not implemented yet.");
+      wassertl (genCmpLtGt (ic, ifxForOp (IC_RESULT (ic), ic)), "78K0 ordering comparison is not implemented yet.");
       break;
 
     case IPUSH:

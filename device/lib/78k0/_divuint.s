@@ -71,6 +71,31 @@ __divmoduint:
 	mov	a,[hl+0x0c]
 	mov	[hl+0x05],a
 
+	; DIVUW handles a 16-bit dividend directly when the divisor fits in C.
+	cmp	a,#0x00
+	bnz	00006$
+	mov	a,[hl+0x04]
+	cmp	a,#0x00
+	bz	00006$
+	mov	c,a
+	mov	a,[hl+0x00]
+	mov	x,a
+	mov	a,[hl+0x01]
+	divuw	c
+	mov	b,a
+	mov	a,[hl+0x06]
+	cmp	a,#0x00
+	bnz	00007$
+	mov	a,b
+	br	!00005$
+
+00007$:
+	mov	a,c
+	mov	x,a
+	mov	a,#0x00
+	br	!00005$
+
+00006$:
 	mov	a,#0x10
 	mov	b,a
 

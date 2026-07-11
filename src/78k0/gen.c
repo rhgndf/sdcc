@@ -36,6 +36,9 @@ static void genCritical (void);
 static void genEndCritical (void);
 static void emitByteLeftShift (void);
 static void emitByteRightShift (void);
+static void emitSignMaskForA (void);
+static void emitWordLeftShift (void);
+static bool copyOperandToWideReturn (const operand *source, const int size);
 
 typedef struct labelMap
 {
@@ -2427,6 +2430,92 @@ genUnaryMinus (const iCode *ic)
 }
 
 static bool
+loadOperandExtendedToAX (const operand *op)
+{
+  const int size = getSize (operandType (op));
+
+  if (size == 2)
+    return genOperandReturnValue (op);
+  if (size != 1 || !loadOperandByteToA (op, 0))
+    return false;
+
+  emit2 ("mov", "x,a");
+  if (SPEC_USIGN (getSpec (operandType (op))))
+    emit2 ("mov", "a,#0x00");
+  else
+    emitSignMaskForA ();
+  return true;
+}
+
+static void
+addBCToAX (void)
+{
+  emit2 ("xch", "a,x");
+  emit2 ("add", "a,c");
+  emit2 ("xch", "a,x");
+  emit2 ("addc", "a,b");
+}
+
+static bool
+genMultBySmallLiteral (const iCode *ic)
+{
+  operand *result = IC_RESULT (ic);
+  operand *left = IC_LEFT (ic);
+  operand *right = IC_RIGHT (ic);
+  operand *source;
+  unsigned long long literal;
+  unsigned bit = 0;
+  bool started = false;
+  int result_size;
+
+  if (IS_OP_LITERAL (left) && operandLitValueUll (left) <= 32)
+    {
+      source = right;
+      literal = operandLitValueUll (left);
+    }
+  else if (IS_OP_LITERAL (right) && operandLitValueUll (right) <= 32)
+    {
+      source = left;
+      literal = operandLitValueUll (right);
+    }
+  else
+    return false;
+
+  result_size = k78k0_operandSize (result);
+  if (result_size < 1 || result_size > 2 ||
+      getSize (operandType (source)) < 1 || getSize (operandType (source)) > 2)
+    return false;
+
+  if (!literal)
+    emit2 ("movw", "ax,#0x0000");
+  else
+    {
+      if (!loadOperandExtendedToAX (source))
+        return false;
+      emit2 ("movw", "bc,ax");
+      emit2 ("movw", "ax,#0x0000");
+
+      while ((1ull << bit) <= literal)
+        bit++;
+      while (bit--)
+        {
+          if (started)
+            emitWordLeftShift ();
+          if (literal & (1ull << bit))
+            {
+              addBCToAX ();
+              started = true;
+            }
+        }
+    }
+
+  if (result_size == 1)
+    emit2 ("mov", "a,x");
+  setReturnResult (result, result_size);
+  return true;
+}
+
+static bool
 genMult (const iCode *ic)
 {
   operand *result = IC_RESULT (ic);
@@ -2437,6 +2526,9 @@ genMult (const iCode *ic)
 
   if (!IS_ITEMP (result) || !left || !right)
     return false;
+
+  if (genMultBySmallLiteral (ic))
+    return true;
 
   size = k78k0_operandSize (result);
   if (size < 1 || size > 2)
@@ -3346,6 +3438,26 @@ genPointerSet (const iCode *ic)
   size = k78k0_operandSize (value);
   if (size < 1 || size > K78K0_MAX_SCALAR_BYTES)
     return false;
+
+  if (size > 2 && (!saved_wide_return.valid || operandInReturnValue (value, size)))
+    {
+      if (!copyOperandToWideReturn (value, size))
+        return false;
+
+      clearAResult ();
+      if (!loadPointerToHL (ptr))
+        return false;
+
+      for (int offset = 0; offset < size; offset++)
+        {
+          emit2 ("mov", "a,!%s", wideReturnByteName (offset));
+          emit2 ("mov", "[hl+0x%02x],a", (unsigned)offset);
+        }
+
+      clearRegisterState ();
+      restoreWideReturnState (saved_wide_return);
+      return true;
+    }
 
   if (!savePointerToDE (ptr))
     return false;

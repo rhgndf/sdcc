@@ -9,6 +9,6 @@
 
 	.area DATA
 ___sdcc_heap::
-	.ds 511
+	.ds 1023
 ___sdcc_heap_end::
 	.ds 1

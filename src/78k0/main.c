@@ -237,6 +237,8 @@ k78k0_dwarfRegNum (const struct reg_info *reg)
 static bool
 k78k0_hasNativeMulFor (iCode *ic, sym_link *left, sym_link *right)
 {
+  const int result_size = IS_SYMOP (IC_RESULT (ic)) ? getSize (OP_SYM_TYPE (IC_RESULT (ic))) : 4;
+
   if (ic->op != '*')
     {
       if (ic->op != '/' && ic->op != '%')
@@ -248,6 +250,11 @@ k78k0_hasNativeMulFor (iCode *ic, sym_link *left, sym_link *right)
 
   if (IS_BITINT (OP_SYM_TYPE (IC_RESULT (ic))) && SPEC_BITINTWIDTH (OP_SYM_TYPE (IC_RESULT (ic))) % 8)
     return false;
+
+  if (IS_ITEMP (IC_RESULT (ic)) && result_size <= 2 &&
+      ((IS_LITERAL (left) && ulFromVal (valFromType (left)) <= 32 && getSize (right) <= 2) ||
+       (IS_LITERAL (right) && ulFromVal (valFromType (right)) <= 32 && getSize (left) <= 2)))
+    return true;
 
   return getSize (left) == 1 && getSize (right) == 1 &&
     SPEC_USIGN (getSpec (left)) && SPEC_USIGN (getSpec (right));

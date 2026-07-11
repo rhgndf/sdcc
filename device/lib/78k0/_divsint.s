@@ -107,6 +107,33 @@ __divmodsint:
 	mov	[hl+0x05],a
 
 00004$:
+	mov	a,[hl+0x05]
+	cmp	a,#0x00
+	bnz	00009$
+	mov	a,[hl+0x04]
+	cmp	a,#0x00
+	bz	00009$
+	mov	c,a
+	mov	a,[hl+0x00]
+	cmp	a,#0x00
+	bnz	00010$
+	mov	a,[hl+0x02]
+	mov	x,a
+	mov	a,[hl+0x03]
+	divuw	c
+	br	!00006$
+
+00010$:
+	mov	a,[hl+0x02]
+	mov	x,a
+	mov	a,[hl+0x03]
+	divuw	c
+	mov	a,c
+	mov	x,a
+	mov	a,#0x00
+	br	!00006$
+
+00009$:
 	mov	a,[hl+0x04]
 	mov	x,a
 	mov	a,[hl+0x05]

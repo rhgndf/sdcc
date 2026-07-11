@@ -319,7 +319,7 @@ useHLForStackOffset (const int stack_offset, unsigned *index)
   if (delta > 255)
     return false;
 
-  clearRegisterState ();
+  clearAResult ();
   *index = (unsigned)delta;
   return true;
 }

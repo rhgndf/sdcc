@@ -200,32 +200,33 @@ static void
 k78k0_genInitStartup (FILE *of)
 {
   fprintf (of, "\tmovw\tsp,#0x%04x\n", options.stack_loc & 0xffff);
-  fprintf (of, "\tmovw\thl,#s_DATA\n");
-  fprintf (of, "\tmovw\tbc,#l_DATA\n");
-  fprintf (of, "00003$:\n");
-  fprintf (of, "\tmov\ta,c\n");
-  fprintf (of, "\tor\ta,b\n");
-  fprintf (of, "\tbz\t00004$\n");
-  fprintf (of, "\tmov\ta,#0x00\n");
-  fprintf (of, "\tmov\t[hl],a\n");
-  fprintf (of, "\tincw\thl\n");
-  fprintf (of, "\tdecw\tbc\n");
-  fprintf (of, "\tbr\t!00003$\n");
-  fprintf (of, "00004$:\n");
-  fprintf (of, "\tmovw\tde,#s_INITIALIZER\n");
-  fprintf (of, "\tmovw\thl,#s_INITIALIZED\n");
-  fprintf (of, "\tmovw\tbc,#l_INITIALIZER\n");
-  fprintf (of, "00001$:\n");
-  fprintf (of, "\tmov\ta,c\n");
-  fprintf (of, "\tor\ta,b\n");
-  fprintf (of, "\tbz\t00002$\n");
-  fprintf (of, "\tmov\ta,[de]\n");
-  fprintf (of, "\tmov\t[hl],a\n");
-  fprintf (of, "\tincw\tde\n");
-  fprintf (of, "\tincw\thl\n");
-  fprintf (of, "\tdecw\tbc\n");
-  fprintf (of, "\tbr\t!00001$\n");
-  fprintf (of, "00002$:\n");
+  fputs ("\tmovw\thl,#s_DATA\n"
+         "\tmovw\tbc,#l_DATA\n"
+         "00003$:\n"
+         "\tmov\ta,c\n"
+         "\tor\ta,b\n"
+         "\tbz\t00004$\n"
+         "\tmov\ta,#0x00\n"
+         "\tmov\t[hl],a\n"
+         "\tincw\thl\n"
+         "\tdecw\tbc\n"
+         "\tbr\t!00003$\n"
+         "00004$:\n"
+         "\tmovw\tde,#s_INITIALIZER\n"
+         "\tmovw\thl,#s_INITIALIZED\n"
+         "\tmovw\tbc,#l_INITIALIZER\n"
+         "00001$:\n"
+         "\tmov\ta,c\n"
+         "\tor\ta,b\n"
+         "\tbz\t00002$\n"
+         "\tmov\ta,[de]\n"
+         "\tmov\t[hl],a\n"
+         "\tincw\tde\n"
+         "\tincw\thl\n"
+         "\tdecw\tbc\n"
+         "\tbr\t!00001$\n"
+         "00002$:\n",
+         of);
 }
 
 static int

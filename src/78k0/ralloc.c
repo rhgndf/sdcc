@@ -85,20 +85,13 @@ markRematerializable (iCode *ic)
       return;
     }
 
-  if (ic->op == '=' && IS_SYMOP (IC_RIGHT (ic)) && OP_SYMBOL (IC_RIGHT (ic))->remat &&
-      !isOperandGlobal (result) && !OP_SYMBOL (result)->addrtaken)
+  if ((ic->op == '=' || ic->op == CAST) && IS_SYMOP (IC_RIGHT (ic)) &&
+      OP_SYMBOL (IC_RIGHT (ic))->remat && !isOperandGlobal (result) &&
+      !OP_SYMBOL (result)->addrtaken)
     {
-      setRematerializable (result, OP_SYMBOL (IC_RIGHT (ic))->rematiCode);
-      return;
-    }
-
-  if (ic->op == CAST && IS_SYMOP (IC_RIGHT (ic)) && OP_SYMBOL (IC_RIGHT (ic))->remat &&
-      !isOperandGlobal (result) && !OP_SYMBOL (result)->addrtaken)
-    {
-      sym_link *to_type = operandType (IC_LEFT (ic));
-      sym_link *from_type = operandType (IC_RIGHT (ic));
-
-      if (IS_PTR (to_type) && IS_PTR (from_type))
+      if (ic->op == '=')
+        setRematerializable (result, OP_SYMBOL (IC_RIGHT (ic))->rematiCode);
+      else if (IS_PTR (operandType (IC_LEFT (ic))) && IS_PTR (operandType (IC_RIGHT (ic))))
         setRematerializable (result, ic);
       return;
     }
@@ -183,6 +176,12 @@ callResultNeedsHiddenDestination (const iCode *ic, const symbol *sym, const int 
   return (ic->op == CALL || ic->op == PCALL) && (IS_STRUCT (sym->type) || size > 4);
 }
 
+static bool
+blockIsReachable (const eBBlock *ebb)
+{
+  return !ebb->noPath || ebb->entryLabel == entryLabel || ebb->entryLabel == returnLabel;
+}
+
 void
 k78k0_assignRegisters (ebbIndex *ebbi)
 {
@@ -194,7 +193,7 @@ k78k0_assignRegisters (ebbIndex *ebbi)
     {
       iCode *ic;
 
-      if (ebbs[i]->noPath && (ebbs[i]->entryLabel != entryLabel && ebbs[i]->entryLabel != returnLabel))
+      if (!blockIsReachable (ebbs[i]))
         continue;
 
       for (ic = ebbs[i]->sch; ic; ic = ic->next)
@@ -205,7 +204,7 @@ k78k0_assignRegisters (ebbIndex *ebbi)
     {
       iCode *ic;
 
-      if (ebbs[i]->noPath && (ebbs[i]->entryLabel != entryLabel && ebbs[i]->entryLabel != returnLabel))
+      if (!blockIsReachable (ebbs[i]))
         continue;
 
       for (ic = ebbs[i]->sch; ic; ic = ic->next)

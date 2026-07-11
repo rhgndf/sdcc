@@ -293,6 +293,29 @@ stackByteOffset (const symbol *sym, const int offset)
   return base + stack_pushed + offset;
 }
 
+static bool
+loadSymbolAddressToAX (const symbol *sym, const long offset)
+{
+  clearRegisterState ();
+
+  if (sym->onStack)
+    {
+      emit2 ("movw", "ax,sp");
+      adjustAX (stackByteOffset (sym, (int)offset));
+      return true;
+    }
+
+  if (!sym->rname[0])
+    return false;
+
+  if (offset)
+    emit2 ("movw", "ax,#%s + %ld", sym->rname, offset);
+  else
+    emit2 ("movw", "ax,#%s", sym->rname);
+
+  return true;
+}
+
 static void
 setHLToStackOffset (const int stack_offset)
 {
@@ -859,6 +882,16 @@ loadStackByteToA (const symbol *sym, const int offset)
   return true;
 }
 
+static void
+loadDirectByteToA (const symbol *sym, const int offset)
+{
+  clearAResult ();
+  if (offset == 0)
+    emit2 ("mov", symbolIsSfr (sym) ? "a,%s" : "a,!%s", sym->rname);
+  else
+    emit2 ("mov", symbolIsSfr (sym) ? "a,%s + %d" : "a,!%s + %d", sym->rname, offset);
+}
+
 static bool
 loadStackToReturnValue (const symbol *sym, const int size)
 {
@@ -916,29 +949,25 @@ loadDirectToReturnValue (const symbol *sym, const int size)
     return false;
 
   if (size <= 1)
-    {
-      clearAResult ();
-      emit2 ("mov", "a,!%s", sym->rname);
-    }
+    loadDirectByteToA (sym, 0);
   else if (size <= 2)
     {
-      clearAResult ();
-      emit2 ("mov", "a,!%s", sym->rname);
+      loadDirectByteToA (sym, 0);
       emit2 ("mov", "x,a");
-      emit2 ("mov", "a,!%s + 1", sym->rname);
+      loadDirectByteToA (sym, 1);
     }
   else if (size <= 4)
     {
-      emit2 ("mov", "a,!%s + 2", sym->rname);
+      loadDirectByteToA (sym, 2);
       emit2 ("mov", "c,a");
       if (size == 4)
         {
-          emit2 ("mov", "a,!%s + 3", sym->rname);
+          loadDirectByteToA (sym, 3);
           emit2 ("mov", "b,a");
         }
-      emit2 ("mov", "a,!%s", sym->rname);
+      loadDirectByteToA (sym, 0);
       emit2 ("mov", "x,a");
-      emit2 ("mov", "a,!%s + 1", sym->rname);
+      loadDirectByteToA (sym, 1);
     }
   else
     return false;
@@ -1040,11 +1069,7 @@ loadOperandByteToA (const operand *op, const int offset)
 
       if (!sym->onStack && sym->rname[0])
         {
-          clearAResult ();
-          if (offset == 0)
-            emit2 ("mov", symbolIsSfr (sym) ? "a,%s" : "a,!%s", sym->rname);
-          else
-            emit2 ("mov", symbolIsSfr (sym) ? "a,%s + %d" : "a,!%s + %d", sym->rname, offset);
+          loadDirectByteToA (sym, offset);
           return true;
         }
     }
@@ -1460,9 +1485,8 @@ wideAssignmentTarget (const iCode *ic, const operand *result, const int size)
 }
 
 static bool
-finishWideAssignment (const iCode *ic, const operand *result, const operand *target, const int size)
+finishWideAssignment (const iCode *ic, const operand *result, const operand *target)
 {
-  (void)size;
   if (target && target != result)
     ic->next->generated = true;
   clearAResult ();
@@ -1595,6 +1619,15 @@ unsignedBitIntTopByteMask (const operand *op)
 }
 
 static void
+maskUnsignedBitIntTopByteInA (const operand *op)
+{
+  const unsigned mask = unsignedBitIntTopByteMask (op);
+
+  if (mask != 0xffu)
+    emit2 ("and", "a,#0x%02x", mask);
+}
+
+static void
 normalizeBitIntTopByteInA (const operand *op)
 {
   sym_link *type = getSpec (operandType (op));
@@ -1677,7 +1710,7 @@ genCast (const iCode *ic)
             return false;
         }
 
-      return finishWideAssignment (ic, result, target, result_size);
+      return finishWideAssignment (ic, result, target);
     }
 
   if (result_size == 2 && right_size == 1)
@@ -1731,7 +1764,7 @@ genCast (const iCode *ic)
             return false;
         }
 
-      return finishWideAssignment (ic, result, target, result_size);
+      return finishWideAssignment (ic, result, target);
     }
 
   if (IS_ITEMP (result))
@@ -1761,7 +1794,6 @@ genBinaryAccumulatorOp (const iCode *ic, const char *low_mnemonic, const char *h
   operand *target;
   const bool carry_add = !strcmp (low_mnemonic, "add") && !strcmp (high_mnemonic, "addc");
   const bool carry_sub = !strcmp (low_mnemonic, "sub") && !strcmp (high_mnemonic, "subc");
-  unsigned top_byte_mask;
   int size;
 
   if (!IS_ITEMP (result) || !left || !right)
@@ -1770,8 +1802,6 @@ genBinaryAccumulatorOp (const iCode *ic, const char *low_mnemonic, const char *h
   size = k78k0_operandSize (result);
   if (size < 1 || size > K78K0_MAX_SCALAR_BYTES)
     return false;
-
-  top_byte_mask = unsignedBitIntTopByteMask (result);
 
   if (size > 2)
     {
@@ -1822,8 +1852,8 @@ genBinaryAccumulatorOp (const iCode *ic, const char *low_mnemonic, const char *h
                 return false;
             }
 
-          if (offset == size - 1 && top_byte_mask != 0xffu)
-            emit2 ("and", "a,#0x%02x", top_byte_mask);
+          if (offset == size - 1)
+            maskUnsignedBitIntTopByteInA (result);
 
           if ((carry_add || carry_sub) && offset != size - 1)
             {
@@ -1836,7 +1866,7 @@ genBinaryAccumulatorOp (const iCode *ic, const char *low_mnemonic, const char *h
             return false;
         }
 
-      return finishWideAssignment (ic, result, target, size);
+      return finishWideAssignment (ic, result, target);
     }
 
   if (operandNeedsStackHL (right, size) && !operandNeedsStackHL (left, size))
@@ -1855,69 +1885,33 @@ genBinaryAccumulatorOp (const iCode *ic, const char *low_mnemonic, const char *h
 
   if (size == 1)
     {
-      if (top_byte_mask != 0xffu)
-        emit2 ("and", "a,#0x%02x", top_byte_mask);
+      maskUnsignedBitIntTopByteInA (result);
       setAResult (result);
       return true;
     }
 
-  if (size == 2)
+  emit2 ("mov", "b,a");
+  if (carry_add)
     {
-      emit2 ("mov", "b,a");
-      if (carry_add)
-        {
-          emit2 ("mov", "a,#0x00");
-          emit2 ("addc", "a,#0x00");
-          emit2 ("mov", "c,a");
-        }
-      else if (carry_sub)
-        {
-          emit2 ("mov", "a,#0x00");
-          emit2 ("subc", "a,#0x00");
-          emit2 ("mov", "c,a");
-        }
-
-      adjustStackPointer (-2, true);
-      emit2 ("mov", "a,b");
-      emit2 ("mov", "[hl+0x00],a");
-      if (carry_add || carry_sub)
-        {
-          emit2 ("mov", "a,c");
-          emit2 ("mov", "[hl+0x01],a");
-        }
-
-      if (!loadOperandByteToA (left, 1))
-        return false;
-
-      if (operandByteOnStack (right, 1))
-        ensureHLToSPPreservingAX ();
-
-      if (!aluOperandByteToA (carry_add ? "add" : carry_sub ? "sub" : high_mnemonic, right, 1))
-        return false;
-
-      if (carry_add || carry_sub)
-        {
-          ensureHLToSPPreservingA ("b");
-          emit2 ("add", "a,[hl+0x01]");
-        }
-
-      if (top_byte_mask != 0xffu)
-        emit2 ("and", "a,#0x%02x", top_byte_mask);
-
-      emit2 ("mov", "b,a");
-      setHLToSP ();
-      emit2 ("mov", "a,[hl+0x00]");
-      emit2 ("mov", "x,a");
-      emit2 ("mov", "a,b");
-      emit2 ("movw", "de,ax");
-      adjustStackPointer (2, false);
-      emit2 ("movw", "ax,de");
-
-      setReturnResult (result, size);
-      return true;
+      emit2 ("mov", "a,#0x00");
+      emit2 ("addc", "a,#0x00");
+      emit2 ("mov", "c,a");
+    }
+  else if (carry_sub)
+    {
+      emit2 ("mov", "a,#0x00");
+      emit2 ("subc", "a,#0x00");
+      emit2 ("mov", "c,a");
     }
 
-  emit2 ("mov", "x,a");
+  adjustStackPointer (-2, true);
+  emit2 ("mov", "a,b");
+  emit2 ("mov", "[hl+0x00],a");
+  if (carry_add || carry_sub)
+    {
+      emit2 ("mov", "a,c");
+      emit2 ("mov", "[hl+0x01],a");
+    }
 
   if (!loadOperandByteToA (left, 1))
     return false;
@@ -1925,11 +1919,25 @@ genBinaryAccumulatorOp (const iCode *ic, const char *low_mnemonic, const char *h
   if (operandByteOnStack (right, 1))
     ensureHLToSPPreservingAX ();
 
-  if (!aluOperandByteToA (high_mnemonic, right, 1))
+  if (!aluOperandByteToA (carry_add ? "add" : carry_sub ? "sub" : high_mnemonic, right, 1))
     return false;
 
-  if (top_byte_mask != 0xffu)
-    emit2 ("and", "a,#0x%02x", top_byte_mask);
+  if (carry_add || carry_sub)
+    {
+      ensureHLToSPPreservingA ("b");
+      emit2 ("add", "a,[hl+0x01]");
+    }
+
+  maskUnsignedBitIntTopByteInA (result);
+
+  emit2 ("mov", "b,a");
+  setHLToSP ();
+  emit2 ("mov", "a,[hl+0x00]");
+  emit2 ("mov", "x,a");
+  emit2 ("mov", "a,b");
+  emit2 ("movw", "de,ax");
+  adjustStackPointer (2, false);
+  emit2 ("movw", "ax,de");
 
   setReturnResult (result, size);
   return true;
@@ -2023,9 +2031,7 @@ genPlusWithNarrowOperand (const iCode *ic)
   adjustStackPointer (2, false);
   emit2 ("movw", "ax,de");
 
-  const unsigned top_byte_mask = unsignedBitIntTopByteMask (result);
-  if (top_byte_mask != 0xffu)
-    emit2 ("and", "a,#0x%02x", top_byte_mask);
+  maskUnsignedBitIntTopByteInA (result);
 
   setReturnResult (result, 2);
   return true;
@@ -2066,9 +2072,7 @@ genPlusWithLiteralOffset (const iCode *ic)
 
   adjustAX ((int)offset);
 
-  const unsigned top_byte_mask = unsignedBitIntTopByteMask (result);
-  if (top_byte_mask != 0xffu)
-    emit2 ("and", "a,#0x%02x", top_byte_mask);
+  maskUnsignedBitIntTopByteInA (result);
 
   setReturnResult (result, 2);
   return true;
@@ -2146,7 +2150,7 @@ genUnaryMinus (const iCode *ic)
             return false;
         }
 
-      return finishWideAssignment (ic, result, target, size);
+      return finishWideAssignment (ic, result, target);
     }
 
   if (size > 2)
@@ -2173,7 +2177,7 @@ genUnaryMinus (const iCode *ic)
             return false;
         }
 
-      return finishWideAssignment (ic, result, target, size);
+      return finishWideAssignment (ic, result, target);
     }
 
   if (size == 1)
@@ -2240,7 +2244,6 @@ genMult (const iCode *ic)
   operand *right = IC_RIGHT (ic);
   operand *word_source = NULL;
   unsigned long long literal = 0;
-  unsigned top_byte_mask;
   int size;
 
   if (!IS_ITEMP (result) || !left || !right)
@@ -2274,8 +2277,6 @@ genMult (const iCode *ic)
   if (!isUnsignedByteSource (left) || !isUnsignedByteSource (right))
     return false;
 
-  top_byte_mask = unsignedBitIntTopByteMask (result);
-
   if (operandNeedsStackHL (left, 1) || operandNeedsStackHL (right, 1))
     setHLToSP ();
 
@@ -2292,14 +2293,12 @@ genMult (const iCode *ic)
   if (size == 1)
     {
       emit2 ("mov", "a,x");
-      if (top_byte_mask != 0xffu)
-        emit2 ("and", "a,#0x%02x", top_byte_mask);
+      maskUnsignedBitIntTopByteInA (result);
       setAResult (result);
     }
   else
     {
-      if (top_byte_mask != 0xffu)
-        emit2 ("and", "a,#0x%02x", top_byte_mask);
+      maskUnsignedBitIntTopByteInA (result);
       setReturnResult (result, size);
     }
 
@@ -2479,21 +2478,12 @@ static bool
 pushBigReturnAddress (const operand *result)
 {
   const symbol *sym;
-  int stack_offset;
 
   if (!result || !IS_SYMOP (result))
     return false;
 
   sym = operandStorageSymbol (result);
-  if (sym->onStack)
-    {
-      stack_offset = stackByteOffset (sym, 0);
-      emit2 ("movw", "ax,sp");
-      adjustAX (stack_offset);
-    }
-  else if (sym->rname[0])
-    emit2 ("movw", "ax,#%s", sym->rname);
-  else
+  if (!loadSymbolAddressToAX (sym, 0))
     return false;
 
   emit2 ("push", "ax");
@@ -2503,10 +2493,19 @@ pushBigReturnAddress (const operand *result)
 }
 
 static bool
-finishCall (const iCode *ic, sym_link *ftype, operand *result, const int result_size, const int return_size,
-            const int extra_stack_bytes)
+finishCall (const iCode *ic, sym_link *ftype, operand *result, const bool hidden_return)
 {
-  const int cleanup_bytes = ic->parmBytes + extra_stack_bytes;
+  const int cleanup_bytes = ic->parmBytes + (hidden_return ? 2 : 0);
+  int result_size = 0;
+  int return_size = 0;
+
+  if (!hidden_return)
+    {
+      if (result && IS_ITEMP (result))
+        result_size = k78k0_operandSize (result);
+      if (ftype && IS_FUNC (ftype) && ftype->next && !IS_VOID (ftype->next))
+        return_size = getSize (ftype->next);
+    }
 
   if (cleanup_bytes)
     {
@@ -2565,14 +2564,17 @@ genCall (const iCode *ic)
 {
   operand *left = IC_LEFT (ic);
   operand *result = IC_RESULT (ic);
-  const bool bigreturn = typeReturnsViaHiddenPointer (operandType (left));
-  sym_link *ftype = IS_FUNCPTR (operandType (left)) ? operandType (left)->next : operandType (left);
+  sym_link *left_type;
+  sym_link *ftype;
+  bool bigreturn;
   int first_regarg_size = 0;
-  int result_size = 0;
-  int return_size = 0;
 
   if (ic->op != CALL || !left)
     return false;
+
+  left_type = operandType (left);
+  bigreturn = typeReturnsViaHiddenPointer (left_type);
+  ftype = IS_FUNCPTR (left_type) ? left_type->next : left_type;
 
   clearRegisterState ();
 
@@ -2602,13 +2604,7 @@ genCall (const iCode *ic)
   else
     return false;
 
-  if (!bigreturn && result && IS_ITEMP (result))
-    result_size = k78k0_operandSize (result);
-
-  if (!bigreturn && ftype && IS_FUNC (ftype) && ftype->next && !IS_VOID (ftype->next))
-    return_size = getSize (ftype->next);
-
-  return finishCall (ic, ftype, result, result_size, return_size, bigreturn ? 2 : 0);
+  return finishCall (ic, ftype, result, bigreturn);
 }
 
 static bool
@@ -2616,15 +2612,18 @@ genPcall (const iCode *ic)
 {
   operand *left = IC_LEFT (ic);
   operand *result = IC_RESULT (ic);
-  const bool bigreturn = typeReturnsViaHiddenPointer (operandType (left));
-  sym_link *ftype = IS_FUNCPTR (operandType (left)) ? operandType (left)->next : operandType (left);
+  sym_link *left_type;
+  sym_link *ftype;
   char return_label[32];
+  bool bigreturn;
   int first_regarg_size = 0;
-  int result_size = 0;
-  int return_size = 0;
 
   if (ic->op != PCALL || !left || k78k0_operandSize (left) != 2)
     return false;
+
+  left_type = operandType (left);
+  bigreturn = typeReturnsViaHiddenPointer (left_type);
+  ftype = IS_FUNCPTR (left_type) ? left_type->next : left_type;
 
   first_regarg_size = functionFirstRegArgSize (ftype);
   if (first_regarg_size)
@@ -2651,13 +2650,7 @@ genPcall (const iCode *ic)
   emit2 ("ret", "");
   emitLocalLabel (return_label);
 
-  if (!bigreturn && result && IS_ITEMP (result))
-    result_size = k78k0_operandSize (result);
-
-  if (!bigreturn && ftype && IS_FUNC (ftype) && ftype->next && !IS_VOID (ftype->next))
-    return_size = getSize (ftype->next);
-
-  return finishCall (ic, ftype, result, result_size, return_size, bigreturn ? 2 : 0);
+  return finishCall (ic, ftype, result, bigreturn);
 }
 
 static bool
@@ -2802,26 +2795,7 @@ loadRematerializedAddressToAX (const operand *op)
   if (!sym->remat || !rematerializedAddress (sym->rematiCode, &base, &offset) || !base)
     return false;
 
-  clearRegisterState ();
-
-  if (base->onStack)
-    {
-      const int stack_offset = stackByteOffset (base, (int)offset);
-
-      emit2 ("movw", "ax,sp");
-      adjustAX (stack_offset);
-      return true;
-    }
-
-  if (!base->rname[0])
-    return false;
-
-  if (offset)
-    emit2 ("movw", "ax,#%s + %ld", base->rname, offset);
-  else
-    emit2 ("movw", "ax,#%s", base->rname);
-
-  return true;
+  return loadSymbolAddressToAX (base, offset);
 }
 
 static bool
@@ -2922,23 +2896,7 @@ genAddrOf (const iCode *ic)
   sym = OP_SYMBOL_CONST (left);
   offset = (long)operandLitValue (right);
 
-  clearRegisterState ();
-
-  if (sym->onStack)
-    {
-      const int stack_offset = stackByteOffset (sym, offset);
-
-      emit2 ("movw", "ax,sp");
-      adjustAX (stack_offset);
-    }
-  else if (sym->rname[0])
-    {
-      if (offset)
-        emit2 ("movw", "ax,#%s + %ld", sym->rname, offset);
-      else
-        emit2 ("movw", "ax,#%s", sym->rname);
-    }
-  else
+  if (!loadSymbolAddressToAX (sym, offset))
     return false;
 
   setReturnResult (result, 2);
@@ -3114,7 +3072,7 @@ genPointerGet (const iCode *ic)
           if (!storeAToOperandByte (target, byte))
             return false;
         }
-      return finishWideAssignment (ic, result, target, size);
+      return finishWideAssignment (ic, result, target);
     }
 
   return false;
@@ -3219,9 +3177,7 @@ genPointerSet (const iCode *ic)
         return false;
       emit2 ("mov", "b,a");
 
-      emit2 ("movw", "ax,de");
-      emit2 ("movw", "hl,ax");
-      clearHLState ();
+      setHLFromDE ();
       emit2 ("mov", "a,b");
       emit2 ("mov", "[hl+0x%02x],a", (unsigned)offset);
     }
@@ -3347,6 +3303,26 @@ emitWordArithmeticRightShift (void)
 }
 
 static void
+emitScalarShiftOne (const int size, const bool is_right, const bool is_signed_right)
+{
+  if (size == 1)
+    {
+      if (is_signed_right)
+        emitByteArithmeticRightShift ();
+      else if (is_right)
+        emitByteRightShift ();
+      else
+        emitByteLeftShift ();
+    }
+  else if (is_signed_right)
+    emitWordArithmeticRightShift ();
+  else if (is_right)
+    emitWordRightShift ();
+  else
+    emitWordLeftShift ();
+}
+
+static void
 emitVariableShiftLoop (const int size, const bool is_right, const bool is_signed_right)
 {
   char loop_label[32];
@@ -3363,24 +3339,7 @@ emitVariableShiftLoop (const int size, const bool is_right, const bool is_signed
 
   emitLocalLabel (loop_label);
 
-  if (size == 1)
-    {
-      if (is_signed_right)
-        emitByteArithmeticRightShift ();
-      else if (is_right)
-        emitByteRightShift ();
-      else
-        emitByteLeftShift ();
-    }
-  else
-    {
-      if (is_signed_right)
-        emitWordArithmeticRightShift ();
-      else if (is_right)
-        emitWordRightShift ();
-      else
-        emitWordLeftShift ();
-    }
+  emitScalarShiftOne (size, is_right, is_signed_right);
 
   emit2 ("dbnz", "c,%s", loop_label);
   emitLocalLabel (done_label);
@@ -3615,7 +3574,7 @@ genWideLiteralShift (const iCode *ic, const bool is_right, const bool is_signed_
             return false;
         }
 
-      return finishWideAssignment (ic, result, target, size);
+      return finishWideAssignment (ic, result, target);
     }
 
   byte_count = (unsigned)(count / 8u);
@@ -3635,7 +3594,7 @@ genWideLiteralShift (const iCode *ic, const bool is_right, const bool is_signed_
   if (!maskTargetTopByte (target, size, top_byte_mask))
     return false;
 
-  return finishWideAssignment (ic, result, target, size);
+  return finishWideAssignment (ic, result, target);
 }
 
 static bool
@@ -3686,7 +3645,7 @@ genWideVariableShift (const iCode *ic, const bool is_right, const bool is_signed
 
   if (!maskTargetTopByte (target, size, top_byte_mask))
     return false;
-  return finishWideAssignment (ic, result, target, size);
+  return finishWideAssignment (ic, result, target);
 }
 
 static bool
@@ -3698,7 +3657,6 @@ genShift (const iCode *ic)
   const bool is_right = ic->op == RIGHT_OP;
   bool is_signed_right;
   unsigned long long count;
-  unsigned top_byte_mask;
   int size;
 
   if (!IS_ITEMP (result) || !left || !right)
@@ -3709,8 +3667,6 @@ genShift (const iCode *ic)
   size = getSize (operandType (result));
   if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || getSize (operandType (left)) != size)
     return false;
-
-  top_byte_mask = unsignedBitIntTopByteMask (result);
 
   if (!IS_OP_LITERAL (right))
     {
@@ -3737,8 +3693,7 @@ genShift (const iCode *ic)
 
       emitVariableShiftLoop (size, is_right, is_signed_right);
 
-      if (top_byte_mask != 0xffu)
-        emit2 ("and", "a,#0x%02x", top_byte_mask);
+      maskUnsignedBitIntTopByteInA (result);
 
       if (size == 1)
         setAResult (result);
@@ -3777,17 +3732,9 @@ genShift (const iCode *ic)
         return false;
 
       while (count--)
-        {
-          if (is_signed_right)
-            emitByteArithmeticRightShift ();
-          else if (is_right)
-            emitByteRightShift ();
-          else
-            emitByteLeftShift ();
-        }
+        emitScalarShiftOne (size, is_right, is_signed_right);
 
-      if (top_byte_mask != 0xffu)
-        emit2 ("and", "a,#0x%02x", top_byte_mask);
+      maskUnsignedBitIntTopByteInA (result);
 
       setAResult (result);
       return true;
@@ -3797,17 +3744,9 @@ genShift (const iCode *ic)
     return false;
 
   while (count--)
-    {
-      if (is_signed_right)
-        emitWordArithmeticRightShift ();
-      else if (is_right)
-        emitWordRightShift ();
-      else
-        emitWordLeftShift ();
-    }
+    emitScalarShiftOne (size, is_right, is_signed_right);
 
-  if (top_byte_mask != 0xffu)
-    emit2 ("and", "a,#0x%02x", top_byte_mask);
+  maskUnsignedBitIntTopByteInA (result);
 
   setReturnResult (result, size);
   return true;
@@ -4190,13 +4129,8 @@ copyReturnToHiddenPointer (const operand *left)
   if (size <= 256 && storage && !operandInReturnValue (source, size) &&
       (storage->onStack || storage->rname[0]))
     {
-      if (storage->onStack)
-        {
-          emit2 ("movw", "ax,sp");
-          adjustAX (stackByteOffset (storage, 0));
-        }
-      else
-        emit2 ("movw", "ax,#%s", storage->rname);
+      if (!loadSymbolAddressToAX (storage, 0))
+        return false;
       emit2 ("movw", "de,ax");
 
       setHLToStackOffset (pointer_offset);

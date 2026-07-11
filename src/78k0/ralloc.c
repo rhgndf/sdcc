@@ -16,6 +16,16 @@
 static int spill_slot_id;
 static set *spill_slots;
 
+static void
+setRematerializable (operand *result, iCode *remat_ic)
+{
+  symbol *sym = OP_SYMBOL (result);
+
+  sym->remat = 1;
+  sym->rematiCode = remat_ic;
+  sym->usl.spillLoc = NULL;
+}
+
 reg_info k78k0_regs[] =
 {
   {REG_GPR, K78K0_RB0_X_IDX, "rb0x"},
@@ -71,18 +81,14 @@ markRematerializable (iCode *ic)
 
   if (ic->op == ADDRESS_OF && IS_TRUE_SYMOP (IC_LEFT (ic)))
     {
-      OP_SYMBOL (result)->remat = 1;
-      OP_SYMBOL (result)->rematiCode = ic;
-      OP_SYMBOL (result)->usl.spillLoc = NULL;
+      setRematerializable (result, ic);
       return;
     }
 
   if (ic->op == '=' && IS_SYMOP (IC_RIGHT (ic)) && OP_SYMBOL (IC_RIGHT (ic))->remat &&
       !isOperandGlobal (result) && !OP_SYMBOL (result)->addrtaken)
     {
-      OP_SYMBOL (result)->remat = OP_SYMBOL (IC_RIGHT (ic))->remat;
-      OP_SYMBOL (result)->rematiCode = OP_SYMBOL (IC_RIGHT (ic))->rematiCode;
-      OP_SYMBOL (result)->usl.spillLoc = NULL;
+      setRematerializable (result, OP_SYMBOL (IC_RIGHT (ic))->rematiCode);
       return;
     }
 
@@ -93,30 +99,20 @@ markRematerializable (iCode *ic)
       sym_link *from_type = operandType (IC_RIGHT (ic));
 
       if (IS_PTR (to_type) && IS_PTR (from_type))
-        {
-          OP_SYMBOL (result)->remat = 1;
-          OP_SYMBOL (result)->rematiCode = ic;
-          OP_SYMBOL (result)->usl.spillLoc = NULL;
-        }
+        setRematerializable (result, ic);
       return;
     }
 
   if ((ic->op == '+' || ic->op == '-') && IS_OP_LITERAL (IC_RIGHT (ic)) &&
       IS_SYMOP (IC_LEFT (ic)) && OP_SYMBOL (IC_LEFT (ic))->remat)
     {
-      OP_SYMBOL (result)->remat = 1;
-      OP_SYMBOL (result)->rematiCode = ic;
-      OP_SYMBOL (result)->usl.spillLoc = NULL;
+      setRematerializable (result, ic);
       return;
     }
 
   if (ic->op == '+' && IS_OP_LITERAL (IC_LEFT (ic)) &&
       IS_SYMOP (IC_RIGHT (ic)) && OP_SYMBOL (IC_RIGHT (ic))->remat)
-    {
-      OP_SYMBOL (result)->remat = 1;
-      OP_SYMBOL (result)->rematiCode = ic;
-      OP_SYMBOL (result)->usl.spillLoc = NULL;
-    }
+    setRematerializable (result, ic);
 }
 
 static bool

@@ -19,6 +19,10 @@ char *dsft = "asm";
 static int
 getreg (void)
 {
+  static const char *const names[] = {
+    "x", "a", "c", "b", "e", "d", "l", "h",
+    "ax", "bc", "de", "hl", "sp", "psw"
+  };
   char id[NCPS];
   char *p = ip;
   int c = getnb ();
@@ -31,37 +35,13 @@ getreg (void)
 
   getid (id, c);
 
-  if (strcmp (id, "x") == 0)
-    return K78K0_X;
-  if (strcmp (id, "a") == 0)
-    return K78K0_A;
-  if (strcmp (id, "c") == 0)
-    return K78K0_C;
-  if (strcmp (id, "b") == 0)
-    return K78K0_B;
-  if (strcmp (id, "e") == 0)
-    return K78K0_E;
-  if (strcmp (id, "d") == 0)
-    return K78K0_D;
-  if (strcmp (id, "l") == 0)
-    return K78K0_L;
-  if (strcmp (id, "h") == 0)
-    return K78K0_H;
-  if (strcmp (id, "ax") == 0)
-    return K78K0_AX;
-  if (strcmp (id, "bc") == 0)
-    return K78K0_BC;
-  if (strcmp (id, "de") == 0)
-    return K78K0_DE;
-  if (strcmp (id, "hl") == 0)
-    return K78K0_HL;
-  if (strcmp (id, "sp") == 0)
-    return K78K0_SP;
-  if (strcmp (id, "psw") == 0)
-    return K78K0_PSW;
-  if (strlen (id) == 2 && id[0] == 'r' && id[1] >= '0' && id[1] <= '7')
+  for (int reg = 0; reg < (int)(sizeof (names) / sizeof (names[0])); reg++)
+    if (!strcmp (id, names[reg]))
+      return reg;
+
+  if (id[0] == 'r' && id[1] >= '0' && id[1] <= '7' && !id[2])
     return id[1] - '0';
-  if (strlen (id) == 3 && id[0] == 'r' && id[1] == 'p' && id[2] >= '0' && id[2] <= '3')
+  if (id[0] == 'r' && id[1] == 'p' && id[2] >= '0' && id[2] <= '3' && !id[3])
     return K78K0_AX + (id[2] - '0');
 
   ip = p;
@@ -95,7 +75,7 @@ getrb (void)
 
   getid (id, c);
 
-  if (strlen (id) == 3 && id[0] == 'r' && id[1] == 'b' && id[2] >= '0' && id[2] <= '3')
+  if (id[0] == 'r' && id[1] == 'b' && id[2] >= '0' && id[2] <= '3' && !id[3])
     return id[2] - '0';
 
   ip = p;
@@ -105,19 +85,20 @@ getrb (void)
 static int
 regpair_code (int reg)
 {
-  switch (reg)
-    {
-    case K78K0_AX:
-      return 0;
-    case K78K0_BC:
-      return 1;
-    case K78K0_DE:
-      return 2;
-    case K78K0_HL:
-      return 3;
-    default:
-      return -1;
-    }
+  return reg >= K78K0_AX && reg <= K78K0_HL ? reg - K78K0_AX : -1;
+}
+
+static void
+emit_stack_register (int reg, int psw_opcode, int pair_opcode)
+{
+  const int pair = regpair_code (reg);
+
+  if (reg == K78K0_PSW)
+    outab (psw_opcode);
+  else if (pair >= 0)
+    outab (pair_opcode + (pair << 1));
+  else
+    qerr ();
 }
 
 enum
@@ -213,6 +194,39 @@ direct_class (const struct expr *e, int forced_addr16)
   return K78K0_DIR_SADDR;
 }
 
+static int
+parse_direct (struct expr *e)
+{
+  return direct_class (e, direct_expr (e));
+}
+
+static void
+emit_opcode (int opcode)
+{
+  if (opcode > 0xff)
+    outab ((opcode >> 8) & 0xff);
+  outab (opcode & 0xff);
+}
+
+static void
+emit_direct_opcode (struct expr *addr, int kind, int addr16_opcode, int saddr_opcode, int sfr_opcode)
+{
+  const int opcode = kind == K78K0_DIR_ADDR16 ? addr16_opcode :
+    kind == K78K0_DIR_SADDR ? saddr_opcode : sfr_opcode;
+
+  if (opcode < 0)
+    {
+      qerr ();
+      return;
+    }
+
+  outab (opcode);
+  if (kind == K78K0_DIR_ADDR16)
+    outrw (addr, R_NORM);
+  else
+    outrb (addr, R_USGN);
+}
+
 static void
 check_even_direct (const struct expr *e)
 {
@@ -295,6 +309,24 @@ bracket_operand (struct expr *e)
   return K78K0_MEM_HL;
 }
 
+static void
+emit_memory_opcode (int kind, struct expr *index, const int opcodes[])
+{
+  if (kind < K78K0_MEM_DE || kind > K78K0_MEM_HL_C || opcodes[kind] < 0)
+    {
+      qerr ();
+      return;
+    }
+
+  emit_opcode (opcodes[kind]);
+  if (kind == K78K0_MEM_HL_INDEX)
+    outrb (index, R_USGN);
+}
+
+static const int mov_a_from_memory[] = { 0x85, 0x87, 0xae, 0xab, 0xaa };
+static const int mov_a_to_memory[] = { 0x95, 0x97, 0xbe, 0xbb, 0xba };
+static const int xch_a_memory[] = { 0x05, 0x07, 0xde, 0x318b, 0x318a };
+
 static int
 bit_number (void)
 {
@@ -312,17 +344,15 @@ bit_number (void)
 static int
 bit_number_from_suffix (char *name, int *bit)
 {
-  int pos = 0;
+  char *suffix = strchr (name, '.');
 
-  while (name[pos] && name[pos] != '.')
-    pos++;
-  if (!name[pos])
+  if (!suffix)
     return 0;
 
-  name[pos++] = '\0';
-  if (name[pos] < '0' || name[pos] > '7' || name[pos + 1] != '\0')
+  *suffix++ = '\0';
+  if (suffix[0] < '0' || suffix[0] > '7' || suffix[1])
     qerr ();
-  *bit = name[pos] - '0';
+  *bit = suffix[0] - '0';
   return 1;
 }
 
@@ -333,7 +363,6 @@ bit_operand (void)
   char id[NCPS];
   char *p = ip;
   int c = getnb ();
-  int forced;
 
   b.type = K78K0_BIT_SADDR;
   b.bit = 0;
@@ -390,11 +419,11 @@ bit_operand (void)
   else
     ip = p;
 
-  forced = direct_expr (&b.addr);
+  expr (&b.addr, 0);
   switch (direct_class (&b.addr, 0))
     {
     case K78K0_DIR_SADDR:
-      b.type = forced ? K78K0_BIT_SFR : K78K0_BIT_SADDR;
+      b.type = K78K0_BIT_SADDR;
       break;
     case K78K0_DIR_SFR:
       b.type = K78K0_BIT_SFR;
@@ -531,7 +560,6 @@ emit_byte_alu (int addr16_opcode)
 {
   struct expr e;
   int c;
-  int forced_addr16;
   int kind;
   int dst;
 
@@ -551,28 +579,16 @@ emit_byte_alu (int addr16_opcode)
         }
       else if (c == '[')
         {
+          const int opcodes[] = {
+            -1,
+            addr16_opcode + 0x07,
+            addr16_opcode + 0x01,
+            0x3100 | (addr16_opcode + 0x03),
+            0x3100 | (addr16_opcode + 0x02)
+          };
+
           unget ('[');
-          switch (bracket_operand (&e))
-            {
-            case K78K0_MEM_HL:
-              outab (addr16_opcode + 0x07);
-              break;
-            case K78K0_MEM_HL_INDEX:
-              outab (addr16_opcode + 0x01);
-              outrb (&e, R_USGN);
-              break;
-            case K78K0_MEM_HL_B:
-              outab (0x31);
-              outab (addr16_opcode + 0x03);
-              break;
-            case K78K0_MEM_HL_C:
-              outab (0x31);
-              outab (addr16_opcode + 0x02);
-              break;
-            default:
-              qerr ();
-              break;
-            }
+          emit_memory_opcode (bracket_operand (&e), &e, opcodes);
         }
       else
         {
@@ -590,20 +606,8 @@ emit_byte_alu (int addr16_opcode)
           else
             {
               ip = p;
-              forced_addr16 = direct_expr (&e);
-              kind = direct_class (&e, forced_addr16);
-              if (kind == K78K0_DIR_ADDR16)
-                {
-                  outab (addr16_opcode);
-                  outrw (&e, R_NORM);
-                }
-              else if (kind == K78K0_DIR_SADDR)
-                {
-                  outab (addr16_opcode + 0x06);
-                  outrb (&e, R_USGN);
-                }
-              else
-                qerr ();
+              kind = parse_direct (&e);
+              emit_direct_opcode (&e, kind, addr16_opcode, addr16_opcode + 0x06, -1);
             }
         }
     }
@@ -623,8 +627,7 @@ emit_byte_alu (int addr16_opcode)
 
       clrexpr (&addr);
       clrexpr (&imm);
-      forced_addr16 = direct_expr (&e);
-      if (forced_addr16 || direct_class (&e, 0) != K78K0_DIR_SADDR)
+      if (parse_direct (&e) != K78K0_DIR_SADDR)
         qerr ();
       comma (1);
       addr = e;
@@ -665,41 +668,15 @@ machine (struct mne *mp)
   switch (mp->m_type)
     {
     case S_K78K0_0OP:
-      outab (mp->m_valu);
+      emit_opcode (mp->m_valu);
       break;
 
-    case S_K78K0_0OP2:
-      outab ((mp->m_valu >> 8) & 0xff);
-      outab (mp->m_valu & 0xff);
+    case S_K78K0_BYTE_ALU:
+      emit_byte_alu (mp->m_valu);
       break;
 
-    case S_K78K0_2BYTE:
-      outab ((mp->m_valu >> 8) & 0xff);
-      outab (mp->m_valu & 0xff);
-      break;
-
-    case S_K78K0_ADD:
-      emit_byte_alu (0x08);
-      break;
-
-    case S_K78K0_ADDC:
-      emit_byte_alu (0x28);
-      break;
-
-    case S_K78K0_ADDW:
-      emit_ax_imm16 (0xca);
-      break;
-
-    case S_K78K0_CMPW:
-      emit_ax_imm16 (0xea);
-      break;
-
-    case S_K78K0_AND:
-      emit_byte_alu (0x58);
-      break;
-
-    case S_K78K0_CMP:
-      emit_byte_alu (0x48);
+    case S_K78K0_AX_IMM16:
+      emit_ax_imm16 (mp->m_valu);
       break;
 
     case S_K78K0_CONDBR:
@@ -755,8 +732,7 @@ machine (struct mne *mp)
 
     case S_K78K0_DIVUW:
       expect_reg (K78K0_C);
-      outab (0x31);
-      outab (0x82);
+      emit_opcode (0x3182);
       break;
 
     case S_K78K0_DBNZ:
@@ -772,11 +748,8 @@ machine (struct mne *mp)
         }
       else
         {
-          int forced_addr16;
-
           ip = p;
-          forced_addr16 = direct_expr (&e);
-          if (forced_addr16 || direct_class (&e, 0) != K78K0_DIR_SADDR)
+          if (parse_direct (&e) != K78K0_DIR_SADDR)
             qerr ();
           comma (1);
           outab (0x04);
@@ -786,50 +759,29 @@ machine (struct mne *mp)
         }
       break;
 
-    case S_K78K0_DEC:
-    case S_K78K0_INC:
+    case S_K78K0_INCDEC:
       p = ip;
       dst = getreg ();
       if (is_byte_reg (dst))
-        outab ((mp->m_type == S_K78K0_INC ? 0x40 : 0x50) + dst);
+        outab (((mp->m_valu >> 8) & 0xff) + dst);
       else
         {
-          int forced_addr16;
-
           ip = p;
-          forced_addr16 = direct_expr (&e);
-          if (forced_addr16 || direct_class (&e, 0) != K78K0_DIR_SADDR)
+          if (parse_direct (&e) != K78K0_DIR_SADDR)
             qerr ();
-          outab (mp->m_type == S_K78K0_INC ? 0x81 : 0x91);
+          outab (mp->m_valu & 0xff);
           outrb (&e, R_USGN);
         }
       break;
 
-    case S_K78K0_DECW:
-    case S_K78K0_INCW:
+    case S_K78K0_INCWDECW:
       dst = regpair_code (getreg ());
       if (dst < 0)
         {
           qerr ();
           break;
         }
-      outab ((mp->m_type == S_K78K0_INCW ? 0x80 : 0x90) + (dst << 1));
-      break;
-
-    case S_K78K0_OR:
-      emit_byte_alu (0x68);
-      break;
-
-    case S_K78K0_SUB:
-      emit_byte_alu (0x18);
-      break;
-
-    case S_K78K0_SUBC:
-      emit_byte_alu (0x38);
-      break;
-
-    case S_K78K0_SUBW:
-      emit_ax_imm16 (0xda);
+      outab (mp->m_valu + (dst << 1));
       break;
 
     case S_K78K0_MOV:
@@ -849,28 +801,7 @@ machine (struct mne *mp)
           else if (c == '[')
             {
               unget ('[');
-              switch (bracket_operand (&e))
-                {
-                case K78K0_MEM_DE:
-                  outab (0x85);
-                  break;
-                case K78K0_MEM_HL:
-                  outab (0x87);
-                  break;
-                case K78K0_MEM_HL_INDEX:
-                  outab (0xae);
-                  outrb (&e, R_USGN);
-                  break;
-                case K78K0_MEM_HL_B:
-                  outab (0xab);
-                  break;
-                case K78K0_MEM_HL_C:
-                  outab (0xaa);
-                  break;
-                default:
-                  qerr ();
-                  break;
-                }
+              emit_memory_opcode (bracket_operand (&e), &e, mov_a_from_memory);
             }
           else
             {
@@ -882,33 +813,14 @@ machine (struct mne *mp)
               if (is_byte_reg_except_a (src))
                 outab (0x60 + src);
               else if (src == K78K0_PSW)
-                {
-                  outab (0xf0);
-                  outab (0x1e);
-                }
+                emit_opcode (0xf01e);
               else if (src < 0)
                 {
-                  int forced_addr16;
                   int kind;
 
                   ip = p;
-                  forced_addr16 = direct_expr (&e);
-                  kind = direct_class (&e, forced_addr16);
-                  if (kind == K78K0_DIR_ADDR16)
-                    {
-                      outab (0x8e);
-                      outrw (&e, R_NORM);
-                    }
-                  else if (kind == K78K0_DIR_SADDR)
-                    {
-                      outab (0xf0);
-                      outrb (&e, R_USGN);
-                    }
-                  else
-                    {
-                      outab (0xf4);
-                      outrb (&e, R_USGN);
-                    }
+                  kind = parse_direct (&e);
+                  emit_direct_opcode (&e, kind, 0x8e, 0xf0, 0xf4);
                 }
               else
                 qerr ();
@@ -921,16 +833,14 @@ machine (struct mne *mp)
           if (c == '#')
             {
               expr (&e, 0);
-              outab (0x11);
-              outab (0x1e);
+              emit_opcode (0x111e);
               outrb (&e, R_USGN);
             }
           else
             {
               unget (c);
               expect_reg (K78K0_A);
-              outab (0xf2);
-              outab (0x1e);
+              emit_opcode (0xf21e);
             }
         }
       else if (is_byte_reg_except_a (dst))
@@ -957,28 +867,7 @@ machine (struct mne *mp)
           if (c == '[')
             {
               unget ('[');
-              switch (bracket_operand (&e))
-                {
-                case K78K0_MEM_DE:
-                  outab (0x95);
-                  break;
-                case K78K0_MEM_HL:
-                  outab (0x97);
-                  break;
-                case K78K0_MEM_HL_INDEX:
-                  outab (0xbe);
-                  outrb (&e, R_USGN);
-                  break;
-                case K78K0_MEM_HL_B:
-                  outab (0xbb);
-                  break;
-                case K78K0_MEM_HL_C:
-                  outab (0xba);
-                  break;
-                default:
-                  qerr ();
-                  break;
-                }
+              emit_memory_opcode (bracket_operand (&e), &e, mov_a_to_memory);
               comma (1);
               expect_reg (K78K0_A);
               break;
@@ -988,13 +877,11 @@ machine (struct mne *mp)
           {
             struct expr addr;
             struct expr imm;
-            int forced_addr16;
             int kind;
 
             clrexpr (&addr);
             clrexpr (&imm);
-            forced_addr16 = direct_expr (&addr);
-            kind = direct_class (&addr, forced_addr16);
+            kind = parse_direct (&addr);
             comma (1);
             c = getnb ();
             if (c == '#')
@@ -1010,16 +897,7 @@ machine (struct mne *mp)
               {
                 unget (c);
                 expect_reg (K78K0_A);
-                if (kind == K78K0_DIR_ADDR16)
-                  {
-                    outab (0x9e);
-                    outrw (&addr, R_NORM);
-                  }
-                else
-                  {
-                    outab (kind == K78K0_DIR_SADDR ? 0xf2 : 0xf6);
-                    outrb (&addr, R_USGN);
-                  }
+                emit_direct_opcode (&addr, kind, 0x9e, 0xf2, 0xf6);
               }
           }
         }
@@ -1044,13 +922,10 @@ machine (struct mne *mp)
                 {
                   expr (&e, 0);
 
-                  if (regpair_code (dst) >= 0)
-                    outab (0x10 + (regpair_code (dst) << 1));
+                  if ((c = regpair_code (dst)) >= 0)
+                    outab (0x10 + (c << 1));
                   else if (dst == K78K0_SP)
-                    {
-                      outab (0xee);
-                      outab (0x1c);
-                    }
+                    emit_opcode (0xee1c);
                   else
                     {
                       qerr ();
@@ -1060,50 +935,25 @@ machine (struct mne *mp)
                 }
               else if (dst == K78K0_AX)
                 {
-                  int forced_addr16;
                   int kind;
 
                   ip = sp;
                   comma (1);
-                  forced_addr16 = direct_expr (&e);
-                  kind = direct_class (&e, forced_addr16);
+                  kind = parse_direct (&e);
                   check_even_direct (&e);
-                  if (kind == K78K0_DIR_ADDR16)
-                    {
-                      outab (0x02);
-                      outrw (&e, R_NORM);
-                    }
-                  else
-                    {
-                      outab (kind == K78K0_DIR_SADDR ? 0x89 : 0xa9);
-                      outrb (&e, R_USGN);
-                    }
+                  emit_direct_opcode (&e, kind, 0x02, 0x89, 0xa9);
                 }
               else
                 qerr ();
             }
           else if (dst == K78K0_AX && src == K78K0_SP)
-            {
-              outab (0xa9);
-              outab (0x1c);
-            }
-          else if (dst == K78K0_AX && src == K78K0_BC)
-            outab (0xc2);
-          else if (dst == K78K0_AX && src == K78K0_HL)
-            outab (0xc6);
-          else if (dst == K78K0_AX && src == K78K0_DE)
-            outab (0xc4);
-          else if (dst == K78K0_BC && src == K78K0_AX)
-            outab (0xd2);
-          else if (dst == K78K0_DE && src == K78K0_AX)
-            outab (0xd4);
-          else if (dst == K78K0_HL && src == K78K0_AX)
-            outab (0xd6);
+            emit_opcode (0xa91c);
+          else if (dst == K78K0_AX && (c = regpair_code (src)) >= 1)
+            outab (0xc0 + (c << 1));
+          else if (src == K78K0_AX && (c = regpair_code (dst)) >= 1)
+            outab (0xd0 + (c << 1));
           else if (dst == K78K0_SP && src == K78K0_AX)
-            {
-              outab (0xb9);
-              outab (0x1c);
-            }
+            emit_opcode (0xb91c);
           else
             qerr ();
         }
@@ -1111,13 +961,11 @@ machine (struct mne *mp)
         {
           struct expr addr;
           struct expr imm;
-          int forced_addr16;
           int kind;
 
           clrexpr (&addr);
           clrexpr (&imm);
-          forced_addr16 = direct_expr (&addr);
-          kind = direct_class (&addr, forced_addr16);
+          kind = parse_direct (&addr);
           check_even_direct (&addr);
           comma (1);
           c = getnb ();
@@ -1134,44 +982,18 @@ machine (struct mne *mp)
             {
               unget (c);
               expect_reg (K78K0_AX);
-              if (kind == K78K0_DIR_ADDR16)
-                {
-                  outab (0x03);
-                  outrw (&addr, R_NORM);
-                }
-              else
-                {
-                  outab (kind == K78K0_DIR_SADDR ? 0x99 : 0xb9);
-                  outrb (&addr, R_USGN);
-                }
+              emit_direct_opcode (&addr, kind, 0x03, 0x99, 0xb9);
             }
         }
       break;
 
-    case S_K78K0_POP:
-      dst = getreg ();
-      if (dst == K78K0_PSW)
-        outab (0x23);
-      else if (regpair_code (dst) >= 0)
-        outab (0xb0 + (regpair_code (dst) << 1));
-      else
-        qerr ();
-      break;
-
-    case S_K78K0_PUSH:
-      src = getreg ();
-      if (src == K78K0_PSW)
-        outab (0x22);
-      else if (regpair_code (src) >= 0)
-        outab (0xb1 + (regpair_code (src) << 1));
-      else
-        qerr ();
+    case S_K78K0_STACK:
+      emit_stack_register (getreg (), (mp->m_valu >> 8) & 0xff, mp->m_valu & 0xff);
       break;
 
     case S_K78K0_MULU:
       expect_reg (K78K0_X);
-      outab (0x31);
-      outab (0x88);
+      emit_opcode (0x3188);
       break;
 
     case S_K78K0_ROT:
@@ -1185,17 +1007,13 @@ machine (struct mne *mp)
     case S_K78K0_ROT4:
       if (bracket_operand (&e) != K78K0_MEM_HL)
         qerr ();
-      outab ((mp->m_valu >> 8) & 0xff);
-      outab (mp->m_valu & 0xff);
+      emit_opcode (mp->m_valu);
       break;
 
     case S_K78K0_BR:
       p = ip;
       if (getreg () == K78K0_AX)
-        {
-          outab (0x31);
-          outab (0x98);
-        }
+        emit_opcode (0x3198);
       else
         {
           c = getnb ();
@@ -1255,30 +1073,7 @@ machine (struct mne *mp)
       if (c == '[')
         {
           unget ('[');
-          switch (bracket_operand (&e))
-            {
-            case K78K0_MEM_DE:
-              outab (0x05);
-              break;
-            case K78K0_MEM_HL:
-              outab (0x07);
-              break;
-            case K78K0_MEM_HL_INDEX:
-              outab (0xde);
-              outrb (&e, R_USGN);
-              break;
-            case K78K0_MEM_HL_B:
-              outab (0x31);
-              outab (0x8b);
-              break;
-            case K78K0_MEM_HL_C:
-              outab (0x31);
-              outab (0x8a);
-              break;
-            default:
-              qerr ();
-              break;
-            }
+          emit_memory_opcode (bracket_operand (&e), &e, xch_a_memory);
         }
       else
         {
@@ -1289,22 +1084,11 @@ machine (struct mne *mp)
             outab (0x30 + src);
           else
             {
-              int forced_addr16;
               int kind;
 
               ip = p;
-              forced_addr16 = direct_expr (&e);
-              kind = direct_class (&e, forced_addr16);
-              if (kind == K78K0_DIR_ADDR16)
-                {
-                  outab (0xce);
-                  outrw (&e, R_NORM);
-                }
-              else
-                {
-                  outab (kind == K78K0_DIR_SADDR ? 0x83 : 0x93);
-                  outrb (&e, R_USGN);
-                }
+              kind = parse_direct (&e);
+              emit_direct_opcode (&e, kind, 0xce, 0x83, 0x93);
             }
         }
       break;
@@ -1319,10 +1103,6 @@ machine (struct mne *mp)
           break;
         }
       outab (0xe0 + (src << 1));
-      break;
-
-    case S_K78K0_XOR:
-      emit_byte_alu (0x78);
       break;
 
     default:

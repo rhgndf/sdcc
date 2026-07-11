@@ -9,11 +9,7 @@
 #include <stdint.h>
 #endif
 
-#if defined(__SDCC_78k0) && ({size}) == 64
-#define SKIP_ROTATE_TEST
-#endif
-
-#if !defined(__SDCC_pdk13) && !defined(__SDCC_pdk14) && !defined(SKIP_ROTATE_TEST) // Lack of memory
+#if !defined(__SDCC_pdk13) && !defined(__SDCC_pdk14) // Lack of memory
 #if !(defined (__SDCC_pdk15) && defined(__SDCC_STACK_AUTO)) // Lack of code memory
 
 #define SIZE ({size})
@@ -94,7 +90,7 @@ void
 testRol(void)
 {
 #if (!defined(__SDCC_ds390) && !defined(__SDCC_hc08) && !defined(__SDCC_s08)) || SIZE < 32 // Bug #3928, RFE #1013
-#if !defined(__SDCC_pdk13) && !defined(__SDCC_pdk14) && !defined(__SDCC_pdk15) && !defined(SKIP_ROTATE_TEST) // Lack of memory
+#if !defined(__SDCC_pdk13) && !defined(__SDCC_pdk14) && !defined(__SDCC_pdk15) // Lack of memory
     volatile TYPE t = TEST_VECT;
     TYPE u;
 

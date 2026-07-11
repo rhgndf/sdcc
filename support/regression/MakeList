@@ -58,27 +58,17 @@ EXCLUDE_mcs51-small += \
 EXCLUDE_ARCH_mos6502 += \
 	tst_bug-3129
 
-# Generated code or data does not fit in the 78K0 unified 64 KiB address space.
+# The Python emulator does not complete these within the regression timeout.
 EXCLUDE_78k0 += \
-	gte_shiftdi-2 \
 	gcrypt-serpent \
 	serpent \
 	smallserpent \
 	tst_bug-3129 \
-	tst_bug-3606 \
-	tst_bug3502965 \
-	tst_dhrystone \
-	tst_gcc-torture-execute-20050826-1 \
-	tst_gcc-torture-execute-mode-dependent-address \
-	tst_gcc-torture-execute-pr20601-1 \
-	tst_gcc-torture-execute-pr91137 \
-	tst_sieve
-
-# The port has no restartable-sequence atomics. The Python emulator cannot
-# complete the Dilithium NTT within the regression timeout.
-EXCLUDE_78k0 += \
-	tst_atomic \
 	tst_dilithium-ntt
+
+# The port has no restartable-sequence atomics.
+EXCLUDE_78k0 += \
+	tst_atomic
 
 ###################################################
 # GCC Tests

@@ -73,13 +73,6 @@
 #undef OP_decrypt
 #endif
 
-// This implementation exceeds the 78K0 64 KiB code address space.
-#if defined(__SDCC_78k0) && defined(IMPL_opt32_lowsize)
-#undef OP_encrypt
-#undef OP_decrypt
-#undef IMPL_{impl}
-#endif
-
 // Bug #3920 - fails test
 #if defined(IMPL_opt8_lowsize) && __STDC_ENDIAN_NATIVE__ == __STDC_ENDIAN_BIG__
 #undef OP_encrypt

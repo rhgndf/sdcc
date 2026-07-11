@@ -19,7 +19,7 @@ ifdef CROSSCOMPILING
   SDCCFLAGS += -I$(top_srcdir)
 endif
 
-SDCCFLAGS += -m78k0 -DSTACK_SIZE=256 --less-pedantic --out-fmt-ihx --stack-loc 0xf000
+SDCCFLAGS += -m78k0 -DSTACK_SIZE=256 --less-pedantic --out-fmt-ihx --data-loc 0xc000 --idata-loc 0xc000 --stack-loc 0xf000
 LINKFLAGS += 78k0.lib
 
 OBJEXT = .rel

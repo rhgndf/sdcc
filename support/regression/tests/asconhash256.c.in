@@ -73,12 +73,6 @@
 #define NOTEST
 #endif
 
-// These implementations exceed the 78K0 64 KiB code address space.
-#if defined(__SDCC_78k0) && (defined(IMPL_opt32_lowsize) || defined(IMPL_bi8))
-#undef IMPL_{impl}
-#define NOTEST
-#endif
-
 // Bug #3920 - fails test
 #if defined(IMPL_opt8_lowsize) && __STDC_ENDIAN_NATIVE__ == __STDC_ENDIAN_BIG__
 #define NOTEST

@@ -272,6 +272,12 @@ emitCondBranch (const char *inst, const char *label)
 static void
 setHLToSP (void)
 {
+  if (hl_is_sp)
+    {
+      clearRegisterStatePreservingWideReturn ();
+      return;
+    }
+
   clearRegisterStatePreservingWideReturn ();
   emit2 ("movw", "ax,sp");
   emit2 ("movw", "hl,ax");
@@ -283,23 +289,19 @@ setHLToSP (void)
 static void
 ensureHLToSP (void)
 {
-  if (!hl_is_sp)
-    setHLToSP ();
-  else
-    clearRegisterStatePreservingWideReturn ();
+  setHLToSP ();
 }
 
 static void
 ensureHLToSPPreservingA (const char *scratch)
 {
-  emit2 ("mov", "%s,a", scratch);
-
   if (hl_is_sp)
     {
       clearRegisterStatePreservingWideReturn ();
       return;
     }
 
+  emit2 ("mov", "%s,a", scratch);
   setHLToSP ();
   emit2 ("mov", "a,%s", scratch);
 }

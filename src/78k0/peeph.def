@@ -12,6 +12,23 @@ replace restart {
 	mov	[hl],a
 }
 
+// A load followed by a store to the same nonvolatile location leaves memory
+// unchanged. Likewise, A already holds the value immediately after a store.
+
+replace restart {
+	mov	a,[hl%1
+	mov	[hl%1,a
+} by {
+	mov	a,[hl%1
+} if notVolatile
+
+replace restart {
+	mov	[hl%1,a
+	mov	a,[hl%1
+} by {
+	mov	[hl%1,a
+} if notVolatile
+
 // Remove the second half of register round-trips. MOV and MOVW do not alter flags.
 
 replace {

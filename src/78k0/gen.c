@@ -1628,8 +1628,6 @@ genCast (const iCode *ic)
   operand *result = IC_RESULT (ic);
   operand *right = IC_RIGHT (ic);
   operand *target;
-  sym_link *result_type;
-  sym_link *right_type;
   bool normalize_or_truncate;
   unsigned top_byte_mask;
   int result_size;
@@ -1640,11 +1638,9 @@ genCast (const iCode *ic)
 
   result_size = k78k0_operandSize (result);
   right_size = k78k0_operandSize (right);
-  result_type = getSpec (operandType (result));
-  right_type = getSpec (operandType (right));
   top_byte_mask = bitIntTopByteMask (result);
 
-  if (IS_BOOLEAN (result_type) && !IS_BOOLEAN (right_type))
+  if (IS_BOOLEAN (operandType (result)) && !IS_BOOLEAN (operandType (right)))
     return genBooleanCast (result, right);
 
   normalize_or_truncate =

@@ -1,3 +1,17 @@
+// The indexed [HL+byte] form is one byte longer than the native [HL] form.
+
+replace restart {
+	%1	a,[hl+0x00]
+} by {
+	%1	a,[hl]
+} if same(%1 'mov' 'add' 'addc' 'sub' 'subc' 'and' 'or' 'xor' 'cmp' 'xch')
+
+replace restart {
+	mov	[hl+0x00],a
+} by {
+	mov	[hl],a
+}
+
 // Remove the second half of register round-trips. MOV and MOVW do not alter flags.
 
 replace {

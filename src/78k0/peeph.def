@@ -83,3 +83,52 @@ replace {
 } by {
 	movw	hl,ax
 }
+
+// MOV and MOVW do not alter flags, so repeated loads of the same register or
+// immediate value have no observable effect. Restrict operands to registers
+// here: repeating a volatile memory read must not be removed.
+
+replace restart {
+	mov	%1,%2
+	mov	%1,%2
+} by {
+	mov	%1,%2
+} if same(%1 'a' 'x' 'b' 'c'), same(%2 'a' 'x' 'b' 'c')
+
+replace restart {
+	mov	%1,#%2
+	mov	%1,#%2
+} by {
+	mov	%1,#%2
+} if same(%1 'a' 'x' 'b' 'c')
+
+replace restart {
+	movw	%1,%2
+	movw	%1,%2
+} by {
+	movw	%1,%2
+} if same(%1 'ax' 'bc' 'de' 'hl'), same(%2 'ax' 'bc' 'de' 'hl')
+
+replace restart {
+	movw	%1,#%2
+	movw	%1,#%2
+} by {
+	movw	%1,#%2
+} if same(%1 'ax' 'bc' 'de' 'hl')
+
+// A branch to the immediately following label has no effect. The absolute
+// form needs a separate rule because '!' is part of its operand syntax.
+
+replace restart {
+	br	!%1
+%1:
+} by {
+%1:
+} if labelRefCountChange(%1 -1)
+
+replace restart {
+	%1	%2
+%2:
+} by {
+%2:
+} if same(%1 'br' 'bc' 'bnc' 'bz' 'bnz'), labelRefCountChange(%2 -1)

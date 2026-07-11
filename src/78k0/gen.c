@@ -233,12 +233,6 @@ setHLToSP (void)
 }
 
 static void
-ensureHLToSP (void)
-{
-  setHLToSP ();
-}
-
-static void
 ensureHLToSPPreservingA (const char *scratch)
 {
   if (hl_is_sp)
@@ -882,7 +876,7 @@ loadStackToReturnValue (const symbol *sym, const int size)
     {
       if (offset >= 0 && offset + size <= 256)
         {
-          ensureHLToSP ();
+          setHLToSP ();
           emit2 ("mov", "a,[hl+0x%02x]", (unsigned)offset);
           emit2 ("mov", "x,a");
           emit2 ("mov", "a,[hl+0x%02x]", (unsigned)(offset + 1));
@@ -2879,8 +2873,7 @@ loadPointerToHL (const operand *op)
     return false;
 
   emit2 ("movw", "hl,ax");
-  hl_is_sp = false;
-  hl_sp_offset_valid = false;
+  clearHLState ();
   return true;
 }
 
@@ -2968,8 +2961,7 @@ setHLFromDE (void)
 {
   emit2 ("movw", "ax,de");
   emit2 ("movw", "hl,ax");
-  hl_is_sp = false;
-  hl_sp_offset_valid = false;
+  clearHLState ();
 }
 
 static bool
@@ -3229,8 +3221,7 @@ genPointerSet (const iCode *ic)
 
       emit2 ("movw", "ax,de");
       emit2 ("movw", "hl,ax");
-      hl_is_sp = false;
-      hl_sp_offset_valid = false;
+      clearHLState ();
       emit2 ("mov", "a,b");
       emit2 ("mov", "[hl+0x%02x],a", (unsigned)offset);
     }
@@ -4045,8 +4036,7 @@ genPointerIpush (const iCode *ic)
       if (pointer_offset + (unsigned long long)offset)
         adjustAX ((int)(pointer_offset + (unsigned long long)offset));
       emit2 ("movw", "hl,ax");
-      hl_is_sp = false;
-      hl_sp_offset_valid = false;
+      clearHLState ();
       emit2 ("mov", "a,[hl+0x00]");
       ensureHLToSPPreservingA ("c");
       emit2 ("mov", "[hl+0x%02x],a", (unsigned)offset);
@@ -4320,147 +4310,120 @@ gen78K0iCode (iCode *ic)
       break;
 
     case ADDRESS_OF:
-      if (!genAddrOf (ic))
-        wassertl (0, "78K0 address-of is not implemented yet.");
+      wassertl (genAddrOf (ic), "78K0 address-of is not implemented yet.");
       break;
 
     case GET_VALUE_AT_ADDRESS:
-      if (!genPointerGet (ic))
-        wassertl (0, "78K0 pointer read is not implemented yet.");
+      wassertl (genPointerGet (ic), "78K0 pointer read is not implemented yet.");
       break;
 
     case SET_VALUE_AT_ADDRESS:
-      if (!genPointerSet (ic))
-        wassertl (0, "78K0 pointer write is not implemented yet.");
+      wassertl (genPointerSet (ic), "78K0 pointer write is not implemented yet.");
       break;
 
     case CAST:
-      if (!genCast (ic))
-        wassertl (0, "78K0 cast is not implemented yet.");
+      wassertl (genCast (ic), "78K0 cast is not implemented yet.");
       break;
 
     case '+':
-      if (!genPlus (ic))
-        wassertl (0, "78K0 addition is not implemented yet.");
+      wassertl (genPlus (ic), "78K0 addition is not implemented yet.");
       break;
 
     case '-':
-      if (!genMinus (ic))
-        wassertl (0, "78K0 subtraction is not implemented yet.");
+      wassertl (genMinus (ic), "78K0 subtraction is not implemented yet.");
       break;
 
     case '*':
-      if (!genMult (ic))
-        wassertl (0, "78K0 multiplication is not implemented yet.");
+      wassertl (genMult (ic), "78K0 multiplication is not implemented yet.");
       break;
 
     case '/':
     case '%':
-      if (!genDivMod (ic))
-        wassertl (0, "78K0 division/modulo is not implemented yet.");
+      wassertl (genDivMod (ic), "78K0 division/modulo is not implemented yet.");
       break;
 
     case BITWISEAND:
-      if (!genBitwiseAnd (ic))
-        wassertl (0, "78K0 bitwise and is not implemented yet.");
+      wassertl (genBitwiseAnd (ic), "78K0 bitwise and is not implemented yet.");
       break;
 
     case '|':
-      if (!genOr (ic))
-        wassertl (0, "78K0 bitwise or is not implemented yet.");
+      wassertl (genOr (ic), "78K0 bitwise or is not implemented yet.");
       break;
 
     case '^':
-      if (!genXor (ic))
-        wassertl (0, "78K0 bitwise xor is not implemented yet.");
+      wassertl (genXor (ic), "78K0 bitwise xor is not implemented yet.");
       break;
 
     case UNARYMINUS:
-      if (!genUnaryMinus (ic))
-        wassertl (0, "78K0 unary minus is not implemented yet.");
+      wassertl (genUnaryMinus (ic), "78K0 unary minus is not implemented yet.");
       break;
 
     case '!':
-      if (!genNot (ic))
-        wassertl (0, "78K0 logical not is not implemented yet.");
+      wassertl (genNot (ic), "78K0 logical not is not implemented yet.");
       break;
 
     case LEFT_OP:
     case RIGHT_OP:
-      if (!genShift (ic))
-        wassertl (0, "78K0 shift is not implemented yet.");
+      wassertl (genShift (ic), "78K0 shift is not implemented yet.");
       break;
 
     case GETBYTE:
-      if (!genGetByte (ic))
-        wassertl (0, "78K0 get-byte is not implemented yet.");
+      wassertl (genGetByte (ic), "78K0 get-byte is not implemented yet.");
       break;
 
     case GETWORD:
-      if (!genGetWord (ic))
-        wassertl (0, "78K0 get-word is not implemented yet.");
+      wassertl (genGetWord (ic), "78K0 get-word is not implemented yet.");
       break;
 
     case GETABIT:
-      if (!genGetABit (ic))
-        wassertl (0, "78K0 get-bit is not implemented yet.");
+      wassertl (genGetABit (ic), "78K0 get-bit is not implemented yet.");
       break;
 
     case EQ_OP:
     case NE_OP:
-      if (!genCmpEqNe (ic))
-        wassertl (0, "78K0 equality comparison is not implemented yet.");
+      wassertl (genCmpEqNe (ic), "78K0 equality comparison is not implemented yet.");
       break;
 
     case '<':
     case '>':
-      if (!genCmpLtGt (ic))
-        wassertl (0, "78K0 ordering comparison is not implemented yet.");
+      wassertl (genCmpLtGt (ic), "78K0 ordering comparison is not implemented yet.");
       break;
 
     case IPUSH:
-      if (!genIpush (ic))
-        wassertl (0, "78K0 parameter push is not implemented yet.");
+      wassertl (genIpush (ic), "78K0 parameter push is not implemented yet.");
       break;
 
     case IPUSH_VALUE_AT_ADDRESS:
-      if (!genPointerIpush (ic))
-        wassertl (0, "78K0 indirect parameter push is not implemented yet.");
+      wassertl (genPointerIpush (ic), "78K0 indirect parameter push is not implemented yet.");
       break;
 
     case SEND:
-      if (!genSend (ic))
-        wassertl (0, "78K0 register parameter send is not implemented yet.");
+      wassertl (genSend (ic), "78K0 register parameter send is not implemented yet.");
       break;
 
     case RECEIVE:
-      if (!genReceive (ic))
-        wassertl (0, "78K0 register parameter receive is not implemented yet.");
+      wassertl (genReceive (ic), "78K0 register parameter receive is not implemented yet.");
       break;
 
     case CALL:
-      if (!genCall (ic))
-        wassertl (0, "78K0 call is not implemented yet.");
+      wassertl (genCall (ic), "78K0 call is not implemented yet.");
       break;
 
     case PCALL:
-      if (!genPcall (ic))
-        wassertl (0, "78K0 indirect call is not implemented yet.");
+      wassertl (genPcall (ic), "78K0 indirect call is not implemented yet.");
       break;
 
     case IFX:
-      if (!genIfx (ic))
-        wassertl (0, "78K0 conditional branch is not implemented yet.");
+      wassertl (genIfx (ic), "78K0 conditional branch is not implemented yet.");
       break;
 
     case JUMPTABLE:
-      if (!genJumpTable (ic))
-        wassertl (0, "78K0 jump table is not implemented yet.");
+      wassertl (genJumpTable (ic), "78K0 jump table is not implemented yet.");
       break;
 
     case '=':
-      if (POINTER_SET (ic) ? !genPointerSet (ic) : !genAssign (ic))
-        wassertl (0, "78K0 assignment is not implemented yet.");
+      wassertl (POINTER_SET (ic) ? genPointerSet (ic) : genAssign (ic),
+                "78K0 assignment is not implemented yet.");
       break;
 
     case INLINEASM:
@@ -4468,8 +4431,7 @@ gen78K0iCode (iCode *ic)
       break;
 
     case DUMMY_READ_VOLATILE:
-      if (!genDummyReadVolatile (ic))
-        wassertl (0, "78K0 volatile dummy read is not implemented yet.");
+      wassertl (genDummyReadVolatile (ic), "78K0 volatile dummy read is not implemented yet.");
       break;
 
     case CRITICAL:

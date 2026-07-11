@@ -116,6 +116,65 @@ replace restart {
 	movw	%1,#%2
 } if same(%1 'ax' 'bc' 'de' 'hl')
 
+// Discard a side-effect-free AX load when the next instruction replaces AX.
+// Do not match memory sources, since they may be volatile.
+
+replace restart {
+	movw	ax,%1
+	movw	ax,%2
+} by {
+	movw	ax,%2
+} if same(%1 'bc' 'de' 'hl' 'sp')
+
+replace restart {
+	movw	ax,#%1
+	movw	ax,%2
+} by {
+	movw	ax,%2
+}
+
+replace restart {
+	movw	ax,%1
+	movw	ax,#%2
+} by {
+	movw	ax,#%2
+} if same(%1 'bc' 'de' 'hl' 'sp')
+
+replace restart {
+	movw	ax,#%1
+	movw	ax,#%2
+} by {
+	movw	ax,#%2
+}
+
+replace restart {
+	movw	ax,%1
+	movw	ax,#%2 + %3
+} by {
+	movw	ax,#%2 + %3
+} if same(%1 'bc' 'de' 'hl' 'sp')
+
+replace restart {
+	movw	ax,#%1
+	movw	ax,#%2 + %3
+} by {
+	movw	ax,#%2 + %3
+}
+
+replace restart {
+	movw	ax,#%1 + %2
+	movw	ax,#%3
+} by {
+	movw	ax,#%3
+}
+
+replace restart {
+	movw	ax,#%1 + %2
+	movw	ax,#%3 + %4
+} by {
+	movw	ax,#%3 + %4
+}
+
 // A branch to the immediately following label has no effect. The absolute
 // form needs a separate rule because '!' is part of its operand syntax.
 

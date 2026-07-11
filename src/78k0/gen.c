@@ -595,9 +595,9 @@ static void
 mirrorWideReturnLowBytes (void)
 {
   emit2 ("movw", "de,ax");
-  emit2 ("mov", "a,x");
+  emit2 ("mov", "a,e");
   emit2 ("mov", "!%s,a", wideReturnByteName (0));
-  emit2 ("movw", "ax,de");
+  emit2 ("mov", "a,d");
   emit2 ("mov", "!%s,a", wideReturnByteName (1));
   emit2 ("movw", "ax,de");
 }
@@ -609,9 +609,9 @@ mirrorWideCallReturnBytes (const int size)
     return;
 
   emit2 ("movw", "de,ax");
-  emit2 ("mov", "a,x");
+  emit2 ("mov", "a,e");
   emit2 ("mov", "!%s,a", wideReturnByteName (0));
-  emit2 ("movw", "ax,de");
+  emit2 ("mov", "a,d");
   emit2 ("mov", "!%s,a", wideReturnByteName (1));
   if (size >= 3)
     {
@@ -1468,10 +1468,10 @@ storeAccumulatorToStack (const symbol *sym, const int size)
     }
 
   ensureHLToSPPreservingAX ();
+  emit2 ("mov", "a,d");
   if (!storeAToStackByte (sym, 1))
     return false;
-  emit2 ("movw", "ax,de");
-  emit2 ("mov", "a,x");
+  emit2 ("mov", "a,e");
   if (!storeAToStackByte (sym, 0))
     return false;
   emit2 ("movw", "ax,de");
@@ -1495,11 +1495,10 @@ storeReturnMirrorToStack (const symbol *sym, const int size)
         return false;
     }
 
-  emit2 ("movw", "ax,de");
+  emit2 ("mov", "a,d");
   if (!storeAToStackByte (sym, 1))
     return false;
-  emit2 ("movw", "ax,de");
-  emit2 ("mov", "a,x");
+  emit2 ("mov", "a,e");
   if (!storeAToStackByte (sym, 0))
     return false;
   emit2 ("movw", "ax,de");
@@ -1524,10 +1523,9 @@ storeReturnRegistersToDirect (const symbol *sym, const int size)
       emit2 ("mov", "a,!%s", wideReturnByteName (offset));
       storeAToDirectByte (sym, offset);
     }
-  if (size > 2)
-    emit2 ("movw", "ax,de");
+  emit2 ("mov", "a,d");
   storeAToDirectByte (sym, 1);
-  emit2 ("mov", "a,x");
+  emit2 ("mov", "a,e");
   storeAToDirectByte (sym, 0);
   emit2 ("movw", "ax,de");
   return true;
@@ -1564,9 +1562,9 @@ storeReturnValueToDirect (const operand *right, const symbol *sym, const int siz
           emit2 ("mov", "a,!%s", wideReturnByteName (offset));
           storeAToDirectByte (sym, offset);
         }
-      emit2 ("movw", "ax,de");
+      emit2 ("mov", "a,d");
       storeAToDirectByte (sym, 1);
-      emit2 ("mov", "a,x");
+      emit2 ("mov", "a,e");
       storeAToDirectByte (sym, 0);
       emit2 ("movw", "ax,de");
       clearAResult ();
@@ -1590,10 +1588,10 @@ storeReturnValueToStack (const operand *right, const symbol *sym, const int size
   if (size == 2)
     {
       emit2 ("movw", "de,ax");
+      emit2 ("mov", "a,d");
       if (!storeAToStackByte (sym, 1))
         return false;
-      emit2 ("movw", "ax,de");
-      emit2 ("mov", "a,x");
+      emit2 ("mov", "a,e");
       if (!storeAToStackByte (sym, 0))
         return false;
       emit2 ("movw", "ax,de");
@@ -1610,10 +1608,10 @@ storeReturnValueToStack (const operand *right, const symbol *sym, const int size
           if (!storeAToStackByte (sym, offset))
             return false;
         }
-      emit2 ("movw", "ax,de");
+      emit2 ("mov", "a,d");
       if (!storeAToStackByte (sym, 1))
         return false;
-      emit2 ("mov", "a,x");
+      emit2 ("mov", "a,e");
       if (!storeAToStackByte (sym, 0))
         return false;
       emit2 ("movw", "ax,de");

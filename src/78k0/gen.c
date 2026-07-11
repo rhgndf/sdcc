@@ -2858,22 +2858,6 @@ loadUnsignedOperandToAX (const operand *op)
 }
 
 static bool
-loadPointerToHL (const operand *op)
-{
-  const int size = k78k0_operandSize (op);
-
-  if (size != 2)
-    return false;
-
-  if (!genOperandReturnValue (op))
-    return false;
-
-  emit2 ("movw", "hl,ax");
-  clearHLState ();
-  return true;
-}
-
-static bool
 savePointerToDE (const operand *op)
 {
   const int size = getSize (operandType (op));
@@ -2884,6 +2868,17 @@ savePointerToDE (const operand *op)
   if (!genOperandReturnValue (op))
     return false;
 
+  emit2 ("movw", "de,ax");
+  return true;
+}
+
+static bool
+savePointerToDEAtOffset (const operand *op, const long offset)
+{
+  if (k78k0_operandSize (op) != 2 || !genOperandReturnValue (op))
+    return false;
+
+  adjustAX ((int)offset);
   emit2 ("movw", "de,ax");
   return true;
 }
@@ -2950,27 +2945,9 @@ savePointerToDEWithOffset (const operand *ptr, long *offset, const unsigned size
   if (*offset >= 0 && (unsigned long)*offset + size <= 256u)
     return savePointerToDE (ptr);
 
-  if (!genOperandReturnValue (ptr))
+  if (!savePointerToDEAtOffset (ptr, *offset))
     return false;
 
-  adjustAX ((int)*offset);
-  emit2 ("movw", "de,ax");
-  *offset = 0;
-  return true;
-}
-
-static bool
-loadPointerToHLWithOffset (const operand *ptr, long *offset, const unsigned size)
-{
-  if (*offset >= 0 && (unsigned long)*offset + size <= 256u)
-    return loadPointerToHL (ptr);
-
-  if (!genOperandReturnValue (ptr))
-    return false;
-
-  adjustAX ((int)*offset);
-  emit2 ("movw", "hl,ax");
-  clearHLState ();
   *offset = 0;
   return true;
 }
@@ -3061,21 +3038,22 @@ genPointerGet (const iCode *ic)
   if (IS_BITFIELD (bit_field_type))
     return genPointerGetBitField (result, left, offset, bit_field_type);
 
-  if (!loadPointerToHLWithOffset (left, &offset, (unsigned)size))
+  if (!savePointerToDEAtOffset (left, offset))
     return false;
 
   if (size == 1)
     {
-      emit2 ("mov", "a,[hl+0x%02x]", (unsigned)offset);
+      emit2 ("mov", "a,[de]");
       setAResult (result);
       return true;
     }
 
   if (size == 2)
     {
-      emit2 ("mov", "a,[hl+0x%02x]", (unsigned)offset);
+      emit2 ("mov", "a,[de]");
       emit2 ("mov", "x,a");
-      emit2 ("mov", "a,[hl+0x%02x]", (unsigned)(offset + 1u));
+      emit2 ("incw", "de");
+      emit2 ("mov", "a,[de]");
       setReturnResult (result, size);
       return true;
     }
@@ -3085,14 +3063,13 @@ genPointerGet (const iCode *ic)
       target = wideAssignmentTarget (ic, result, size);
       if (!target)
         return true;
-      emit2 ("movw", "ax,hl");
-      emit2 ("movw", "de,ax");
       for (int byte = 0; byte < size; byte++)
         {
-          setHLFromDE ();
-          emit2 ("mov", "a,[hl+0x%02x]", (unsigned)(offset + byte));
+          emit2 ("mov", "a,[de]");
           if (!storeAToOperandByte (target, byte))
             return false;
+          if (byte + 1 < size)
+            emit2 ("incw", "de");
         }
       return finishWideAssignment (ic, result, target);
     }
@@ -3197,11 +3174,9 @@ genPointerSet (const iCode *ic)
     {
       if (!loadOperandByteToA (value, offset))
         return false;
-      emit2 ("mov", "b,a");
-
-      setHLFromDE ();
-      emit2 ("mov", "a,b");
-      emit2 ("mov", "[hl+0x%02x],a", (unsigned)offset);
+      emit2 ("mov", "[de],a");
+      if (offset + 1 < size)
+        emit2 ("incw", "de");
     }
 
   clearAResult ();
@@ -3987,22 +3962,18 @@ genPointerIpush (const iCode *ic)
   if (size < 1 || pointer_offset + (unsigned long long)size > 256u || size > 256)
     return false;
 
-  if (!loadPointerToHL (left))
+  if (!savePointerToDEAtOffset (left, (long)pointer_offset))
     return false;
 
-  emit2 ("movw", "de,ax");
   adjustStackPointer (-size, true);
 
   for (int offset = 0; offset < size; offset++)
     {
-      emit2 ("movw", "ax,de");
-      if (pointer_offset + (unsigned long long)offset)
-        adjustAX ((int)(pointer_offset + (unsigned long long)offset));
-      emit2 ("movw", "hl,ax");
-      clearHLState ();
-      emit2 ("mov", "a,[hl+0x00]");
+      emit2 ("mov", "a,[de]");
       ensureHLToSPPreservingA ("c");
       emit2 ("mov", "[hl+0x%02x],a", (unsigned)offset);
+      if (offset + 1 < size)
+        emit2 ("incw", "de");
     }
 
   clearAResult ();

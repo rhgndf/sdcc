@@ -77,8 +77,7 @@ __divchar_common:
 	movw	hl,ax
 	mov	a,[hl+0x04]
 	mov	b,a
-	mov	a,#0x00
-	mov	d,a
+	mov	d,#0x00
 
 	mov	a,e
 	and	a,#0x01
@@ -89,8 +88,7 @@ __divchar_common:
 	mov	a,#0x00
 	sub	a,c
 	mov	c,a
-	mov	a,#0x01
-	mov	d,a
+	mov	d,#0x01
 
 00001$:
 	mov	a,e

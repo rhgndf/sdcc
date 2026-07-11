@@ -69,9 +69,8 @@ _memcpy:
 	movw	bc,ax
 	pop	de
 	pop	hl
-	movw	ax,sp
-	addw	ax,#0x0004
-	movw	sp,ax
+	pop	ax
+	pop	ax
 	push	hl
 	movw	ax,bc
 	ret

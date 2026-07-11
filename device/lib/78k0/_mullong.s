@@ -32,8 +32,7 @@
 
 __mullong:
 	push	ax
-	movw	ax,de
-	push	ax
+	push	de
 	movw	ax,sp
 	subw	ax,#0x000c
 	movw	sp,ax
@@ -44,7 +43,7 @@ __mullong:
 	mov	a,[hl+0x0f]
 	mov	[hl+0x01],a
 	mov	a,x
-	mov	[hl+0x00],a
+	mov	[hl],a
 	mov	a,c
 	mov	[hl+0x02],a
 	mov	a,b
@@ -65,57 +64,51 @@ __mullong:
 	mov	[hl+0x0a],a
 	mov	[hl+0x0b],a
 
-	mov	a,#0x20
-	mov	b,a
-
+	; Truncated base-256 schoolbook multiplication. For each source byte,
+	; only products below byte four are accumulated.
+	mov	b,#0x00
 00001$:
-	mov	a,[hl+0x04]
-	and	a,#0x01
-	bz	00002$
-
-	mov	a,[hl+0x08]
-	add	a,[hl+0x00]
-	mov	[hl+0x08],a
-	mov	a,[hl+0x09]
-	addc	a,[hl+0x01]
-	mov	[hl+0x09],a
-	mov	a,[hl+0x0a]
-	addc	a,[hl+0x02]
-	mov	[hl+0x0a],a
-	mov	a,[hl+0x0b]
-	addc	a,[hl+0x03]
-	mov	[hl+0x0b],a
-
+	mov	a,[hl+b]
+	mov	e,a
+	mov	d,#0x00
+	mov	c,#0x04
 00002$:
-	clr1	cy
-	mov	a,[hl+0x07]
-	rorc	a,1
-	mov	[hl+0x07],a
-	mov	a,[hl+0x06]
-	rorc	a,1
-	mov	[hl+0x06],a
-	mov	a,[hl+0x05]
-	rorc	a,1
-	mov	[hl+0x05],a
-	mov	a,[hl+0x04]
-	rorc	a,1
-	mov	[hl+0x04],a
+	mov	a,[hl+c]
+	mov	x,a
+	mov	a,e
+	mulu	x
+	xch	a,d
+	add	a,x
+	mov	x,a
+	mov	a,d
+	addc	a,#0x00
+	mov	d,a
 
-	clr1	cy
-	mov	a,[hl+0x00]
-	rolc	a,1
-	mov	[hl+0x00],a
-	mov	a,[hl+0x01]
-	rolc	a,1
-	mov	[hl+0x01],a
-	mov	a,[hl+0x02]
-	rolc	a,1
-	mov	[hl+0x02],a
-	mov	a,[hl+0x03]
-	rolc	a,1
-	mov	[hl+0x03],a
+	; C addresses the multiplier; temporarily retarget it at result[B+C+4].
+	mov	a,c
+	add	a,b
+	add	a,#0x04
+	mov	c,a
+	mov	a,x
+	add	a,[hl+c]
+	mov	[hl+c],a
+	mov	a,d
+	addc	a,#0x00
+	mov	d,a
+	mov	a,c
+	sub	a,b
+	sub	a,#0x04
+	mov	c,a
+	inc	c
+	mov	a,c
+	add	a,b
+	cmp	a,#0x08
+	bc	00002$
 
-	dbnz	b,00001$
+	inc	b
+	mov	a,b
+	cmp	a,#0x04
+	bc	00001$
 
 	mov	a,[hl+0x0c]
 	mov	x,a
@@ -123,12 +116,8 @@ __mullong:
 	movw	de,ax
 
 	mov	a,[hl+0x11]
-	mov	c,a
-	mov	a,c
 	mov	[hl+0x15],a
 	mov	a,[hl+0x10]
-	mov	c,a
-	mov	a,c
 	mov	[hl+0x14],a
 
 	movw	ax,sp

@@ -46,13 +46,12 @@ __divmodulonglong:
 	subw	ax,#0x0019
 	movw	sp,ax
 	movw	hl,ax
-	movw	ax,de
-	push	ax
+	push	de
 	mov	a,c
 	mov	[hl+0x18],a
 
 	mov	a,[hl+0x1d]
-	mov	[hl+0x00],a
+	mov	[hl],a
 	mov	a,[hl+0x1e]
 	mov	[hl+0x01],a
 	mov	a,[hl+0x1f]
@@ -95,128 +94,7 @@ __divmodulonglong:
 	mov	a,[hl+0x2c]
 	mov	[hl+0x17],a
 
-	mov	a,#0x40
-	mov	b,a
-
-00101$:
-	clr1	cy
-	mov	a,[hl+0x00]
-	rolc	a,1
-	mov	[hl+0x00],a
-	mov	a,[hl+0x01]
-	rolc	a,1
-	mov	[hl+0x01],a
-	mov	a,[hl+0x02]
-	rolc	a,1
-	mov	[hl+0x02],a
-	mov	a,[hl+0x03]
-	rolc	a,1
-	mov	[hl+0x03],a
-	mov	a,[hl+0x04]
-	rolc	a,1
-	mov	[hl+0x04],a
-	mov	a,[hl+0x05]
-	rolc	a,1
-	mov	[hl+0x05],a
-	mov	a,[hl+0x06]
-	rolc	a,1
-	mov	[hl+0x06],a
-	mov	a,[hl+0x07]
-	rolc	a,1
-	mov	[hl+0x07],a
-	mov	a,[hl+0x08]
-	rolc	a,1
-	mov	[hl+0x08],a
-	mov	a,[hl+0x09]
-	rolc	a,1
-	mov	[hl+0x09],a
-	mov	a,[hl+0x0a]
-	rolc	a,1
-	mov	[hl+0x0a],a
-	mov	a,[hl+0x0b]
-	rolc	a,1
-	mov	[hl+0x0b],a
-	mov	a,[hl+0x0c]
-	rolc	a,1
-	mov	[hl+0x0c],a
-	mov	a,[hl+0x0d]
-	rolc	a,1
-	mov	[hl+0x0d],a
-	mov	a,[hl+0x0e]
-	rolc	a,1
-	mov	[hl+0x0e],a
-	mov	a,[hl+0x0f]
-	rolc	a,1
-	mov	[hl+0x0f],a
-
-	mov	a,[hl+0x0f]
-	cmp	a,[hl+0x17]
-	bc	00102$
-	bnz	00103$
-	mov	a,[hl+0x0e]
-	cmp	a,[hl+0x16]
-	bc	00102$
-	bnz	00103$
-	mov	a,[hl+0x0d]
-	cmp	a,[hl+0x15]
-	bc	00102$
-	bnz	00103$
-	mov	a,[hl+0x0c]
-	cmp	a,[hl+0x14]
-	bc	00102$
-	bnz	00103$
-	mov	a,[hl+0x0b]
-	cmp	a,[hl+0x13]
-	bc	00102$
-	bnz	00103$
-	mov	a,[hl+0x0a]
-	cmp	a,[hl+0x12]
-	bc	00102$
-	bnz	00103$
-	mov	a,[hl+0x09]
-	cmp	a,[hl+0x11]
-	bc	00102$
-	bnz	00103$
-	mov	a,[hl+0x08]
-	cmp	a,[hl+0x10]
-	bc	00102$
-
-00103$:
-	mov	a,[hl+0x08]
-	sub	a,[hl+0x10]
-	mov	[hl+0x08],a
-	mov	a,[hl+0x09]
-	subc	a,[hl+0x11]
-	mov	[hl+0x09],a
-	mov	a,[hl+0x0a]
-	subc	a,[hl+0x12]
-	mov	[hl+0x0a],a
-	mov	a,[hl+0x0b]
-	subc	a,[hl+0x13]
-	mov	[hl+0x0b],a
-	mov	a,[hl+0x0c]
-	subc	a,[hl+0x14]
-	mov	[hl+0x0c],a
-	mov	a,[hl+0x0d]
-	subc	a,[hl+0x15]
-	mov	[hl+0x0d],a
-	mov	a,[hl+0x0e]
-	subc	a,[hl+0x16]
-	mov	[hl+0x0e],a
-	mov	a,[hl+0x0f]
-	subc	a,[hl+0x17]
-	mov	[hl+0x0f],a
-	mov	a,[hl+0x00]
-	or	a,#0x01
-	mov	[hl+0x00],a
-
-00102$:
-	dbnz	b,00106$
-	br	!00107$
-00106$:
-	br	!00101$
-
-00107$:
+	call	!__divmodlonglong_magnitude
 	mov	a,[hl+0x18]
 	cmp	a,#0x00
 	bnz	00104$
@@ -237,8 +115,7 @@ __divmodulonglong:
 	movw	bc,ax
 	movw	ax,bc
 	movw	hl,ax
-	mov	a,#0x08
-	mov	b,a
+	mov	b,#0x08
 00108$:
 	mov	a,[de]
 	mov	[hl],a
@@ -249,7 +126,7 @@ __divmodulonglong:
 	; Restore DE and move the return address over the hidden pointer and arguments.
 	movw	ax,sp
 	movw	hl,ax
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	mov	x,a
 	mov	a,[hl+0x01]
 	movw	de,ax
@@ -275,15 +152,14 @@ __divmodslonglong:
 	subw	ax,#0x001a
 	movw	sp,ax
 	movw	hl,ax
-	movw	ax,de
-	push	ax
+	push	de
 	mov	a,c
 	mov	[hl+0x18],a
 	mov	a,#0x00
 	mov	[hl+0x19],a
 
 	mov	a,[hl+0x1e]
-	mov	[hl+0x00],a
+	mov	[hl],a
 	mov	a,[hl+0x1f]
 	mov	[hl+0x01],a
 	mov	a,[hl+0x20]
@@ -321,10 +197,10 @@ __divmodslonglong:
 	bz	00201$
 	mov	a,#0x01
 	mov	[hl+0x19],a
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	xor	a,#0xff
 	add	a,#0x01
-	mov	[hl+0x00],a
+	mov	[hl],a
 	mov	a,[hl+0x01]
 	xor	a,#0xff
 	addc	a,#0x00
@@ -399,138 +275,7 @@ __divmodslonglong:
 	mov	[hl+0x19],a
 
 00203$:
-	mov	a,#0x00
-	mov	[hl+0x08],a
-	mov	[hl+0x09],a
-	mov	[hl+0x0a],a
-	mov	[hl+0x0b],a
-	mov	[hl+0x0c],a
-	mov	[hl+0x0d],a
-	mov	[hl+0x0e],a
-	mov	[hl+0x0f],a
-
-	mov	a,#0x40
-	mov	b,a
-
-00204$:
-	clr1	cy
-	mov	a,[hl+0x00]
-	rolc	a,1
-	mov	[hl+0x00],a
-	mov	a,[hl+0x01]
-	rolc	a,1
-	mov	[hl+0x01],a
-	mov	a,[hl+0x02]
-	rolc	a,1
-	mov	[hl+0x02],a
-	mov	a,[hl+0x03]
-	rolc	a,1
-	mov	[hl+0x03],a
-	mov	a,[hl+0x04]
-	rolc	a,1
-	mov	[hl+0x04],a
-	mov	a,[hl+0x05]
-	rolc	a,1
-	mov	[hl+0x05],a
-	mov	a,[hl+0x06]
-	rolc	a,1
-	mov	[hl+0x06],a
-	mov	a,[hl+0x07]
-	rolc	a,1
-	mov	[hl+0x07],a
-	mov	a,[hl+0x08]
-	rolc	a,1
-	mov	[hl+0x08],a
-	mov	a,[hl+0x09]
-	rolc	a,1
-	mov	[hl+0x09],a
-	mov	a,[hl+0x0a]
-	rolc	a,1
-	mov	[hl+0x0a],a
-	mov	a,[hl+0x0b]
-	rolc	a,1
-	mov	[hl+0x0b],a
-	mov	a,[hl+0x0c]
-	rolc	a,1
-	mov	[hl+0x0c],a
-	mov	a,[hl+0x0d]
-	rolc	a,1
-	mov	[hl+0x0d],a
-	mov	a,[hl+0x0e]
-	rolc	a,1
-	mov	[hl+0x0e],a
-	mov	a,[hl+0x0f]
-	rolc	a,1
-	mov	[hl+0x0f],a
-
-	mov	a,[hl+0x0f]
-	cmp	a,[hl+0x17]
-	bc	00205$
-	bnz	00206$
-	mov	a,[hl+0x0e]
-	cmp	a,[hl+0x16]
-	bc	00205$
-	bnz	00206$
-	mov	a,[hl+0x0d]
-	cmp	a,[hl+0x15]
-	bc	00205$
-	bnz	00206$
-	mov	a,[hl+0x0c]
-	cmp	a,[hl+0x14]
-	bc	00205$
-	bnz	00206$
-	mov	a,[hl+0x0b]
-	cmp	a,[hl+0x13]
-	bc	00205$
-	bnz	00206$
-	mov	a,[hl+0x0a]
-	cmp	a,[hl+0x12]
-	bc	00205$
-	bnz	00206$
-	mov	a,[hl+0x09]
-	cmp	a,[hl+0x11]
-	bc	00205$
-	bnz	00206$
-	mov	a,[hl+0x08]
-	cmp	a,[hl+0x10]
-	bc	00205$
-
-00206$:
-	mov	a,[hl+0x08]
-	sub	a,[hl+0x10]
-	mov	[hl+0x08],a
-	mov	a,[hl+0x09]
-	subc	a,[hl+0x11]
-	mov	[hl+0x09],a
-	mov	a,[hl+0x0a]
-	subc	a,[hl+0x12]
-	mov	[hl+0x0a],a
-	mov	a,[hl+0x0b]
-	subc	a,[hl+0x13]
-	mov	[hl+0x0b],a
-	mov	a,[hl+0x0c]
-	subc	a,[hl+0x14]
-	mov	[hl+0x0c],a
-	mov	a,[hl+0x0d]
-	subc	a,[hl+0x15]
-	mov	[hl+0x0d],a
-	mov	a,[hl+0x0e]
-	subc	a,[hl+0x16]
-	mov	[hl+0x0e],a
-	mov	a,[hl+0x0f]
-	subc	a,[hl+0x17]
-	mov	[hl+0x0f],a
-	mov	a,[hl+0x00]
-	or	a,#0x01
-	mov	[hl+0x00],a
-
-00205$:
-	dbnz	b,00211$
-	br	!00212$
-00211$:
-	br	!00204$
-
-00212$:
+	call	!__divmodlonglong_magnitude
 	mov	a,[hl+0x18]
 	cmp	a,#0x00
 	bnz	00208$
@@ -538,10 +283,10 @@ __divmodslonglong:
 	mov	a,[hl+0x19]
 	cmp	a,#0x00
 	bz	00207$
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	xor	a,#0xff
 	add	a,#0x01
-	mov	[hl+0x00],a
+	mov	[hl],a
 	mov	a,[hl+0x01]
 	xor	a,#0xff
 	addc	a,#0x00
@@ -626,8 +371,7 @@ __divmodslonglong:
 	movw	bc,ax
 	movw	ax,bc
 	movw	hl,ax
-	mov	a,#0x08
-	mov	b,a
+	mov	b,#0x08
 00213$:
 	mov	a,[de]
 	mov	[hl],a
@@ -638,7 +382,7 @@ __divmodslonglong:
 	; Restore DE and move the return address over the hidden pointer and arguments.
 	movw	ax,sp
 	movw	hl,ax
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	mov	x,a
 	mov	a,[hl+0x01]
 	movw	de,ax
@@ -650,3 +394,172 @@ __divmodslonglong:
 	addw	ax,#0x002e
 	movw	sp,ax
 	ret
+
+; Divide the magnitude in bytes 0..7 by bytes 16..23. The quotient replaces
+; the dividend and the remainder is left in bytes 8..15.
+__divmodlonglong_magnitude:
+	mov	a,#0x00
+	mov	[hl+0x08],a
+	mov	[hl+0x09],a
+	mov	[hl+0x0a],a
+	mov	[hl+0x0b],a
+	mov	[hl+0x0c],a
+	mov	[hl+0x0d],a
+	mov	[hl+0x0e],a
+	mov	[hl+0x0f],a
+
+	; DIVUW can consume a wide dividend a byte at a time when the divisor
+	; fits in C. D carries the remainder between bytes.
+	mov	a,[hl+0x17]
+	or	a,[hl+0x16]
+	or	a,[hl+0x15]
+	or	a,[hl+0x14]
+	or	a,[hl+0x13]
+	or	a,[hl+0x12]
+	or	a,[hl+0x11]
+	bnz	00305$
+	mov	a,[hl+0x10]
+	cmp	a,#0x00
+	bz	00305$
+	mov	e,a
+	mov	d,#0x00
+	mov	b,#0x08
+00306$:
+	dec	b
+	mov	a,[hl+b]
+	mov	x,a
+	mov	a,e
+	mov	c,a
+	mov	a,d
+	divuw	c
+	mov	a,c
+	mov	d,a
+	mov	a,x
+	mov	[hl+b],a
+	mov	a,b
+	cmp	a,#0x00
+	bnz	00306$
+	mov	a,d
+	mov	[hl+0x08],a
+	ret
+
+00305$:
+	mov	b,#0x40
+
+00301$:
+	clr1	cy
+	mov	a,[hl]
+	rolc	a,1
+	mov	[hl],a
+	mov	a,[hl+0x01]
+	rolc	a,1
+	mov	[hl+0x01],a
+	mov	a,[hl+0x02]
+	rolc	a,1
+	mov	[hl+0x02],a
+	mov	a,[hl+0x03]
+	rolc	a,1
+	mov	[hl+0x03],a
+	mov	a,[hl+0x04]
+	rolc	a,1
+	mov	[hl+0x04],a
+	mov	a,[hl+0x05]
+	rolc	a,1
+	mov	[hl+0x05],a
+	mov	a,[hl+0x06]
+	rolc	a,1
+	mov	[hl+0x06],a
+	mov	a,[hl+0x07]
+	rolc	a,1
+	mov	[hl+0x07],a
+	mov	a,[hl+0x08]
+	rolc	a,1
+	mov	[hl+0x08],a
+	mov	a,[hl+0x09]
+	rolc	a,1
+	mov	[hl+0x09],a
+	mov	a,[hl+0x0a]
+	rolc	a,1
+	mov	[hl+0x0a],a
+	mov	a,[hl+0x0b]
+	rolc	a,1
+	mov	[hl+0x0b],a
+	mov	a,[hl+0x0c]
+	rolc	a,1
+	mov	[hl+0x0c],a
+	mov	a,[hl+0x0d]
+	rolc	a,1
+	mov	[hl+0x0d],a
+	mov	a,[hl+0x0e]
+	rolc	a,1
+	mov	[hl+0x0e],a
+	mov	a,[hl+0x0f]
+	rolc	a,1
+	mov	[hl+0x0f],a
+
+	mov	a,[hl+0x0f]
+	cmp	a,[hl+0x17]
+	bc	00302$
+	bnz	00303$
+	mov	a,[hl+0x0e]
+	cmp	a,[hl+0x16]
+	bc	00302$
+	bnz	00303$
+	mov	a,[hl+0x0d]
+	cmp	a,[hl+0x15]
+	bc	00302$
+	bnz	00303$
+	mov	a,[hl+0x0c]
+	cmp	a,[hl+0x14]
+	bc	00302$
+	bnz	00303$
+	mov	a,[hl+0x0b]
+	cmp	a,[hl+0x13]
+	bc	00302$
+	bnz	00303$
+	mov	a,[hl+0x0a]
+	cmp	a,[hl+0x12]
+	bc	00302$
+	bnz	00303$
+	mov	a,[hl+0x09]
+	cmp	a,[hl+0x11]
+	bc	00302$
+	bnz	00303$
+	mov	a,[hl+0x08]
+	cmp	a,[hl+0x10]
+	bc	00302$
+
+00303$:
+	mov	a,[hl+0x08]
+	sub	a,[hl+0x10]
+	mov	[hl+0x08],a
+	mov	a,[hl+0x09]
+	subc	a,[hl+0x11]
+	mov	[hl+0x09],a
+	mov	a,[hl+0x0a]
+	subc	a,[hl+0x12]
+	mov	[hl+0x0a],a
+	mov	a,[hl+0x0b]
+	subc	a,[hl+0x13]
+	mov	[hl+0x0b],a
+	mov	a,[hl+0x0c]
+	subc	a,[hl+0x14]
+	mov	[hl+0x0c],a
+	mov	a,[hl+0x0d]
+	subc	a,[hl+0x15]
+	mov	[hl+0x0d],a
+	mov	a,[hl+0x0e]
+	subc	a,[hl+0x16]
+	mov	[hl+0x0e],a
+	mov	a,[hl+0x0f]
+	subc	a,[hl+0x17]
+	mov	[hl+0x0f],a
+	mov	a,[hl]
+	or	a,#0x01
+	mov	[hl],a
+
+00302$:
+	dbnz	b,00304$
+	ret
+00304$:
+	br	!00301$

@@ -23,7 +23,7 @@ ___setjmp:
 	movw	bc,ax
 	mov	[hl+0x01],a
 	mov	a,x
-	mov	[hl+0x00],a
+	mov	[hl],a
 	movw	ax,sp
 	mov	[hl+0x03],a
 	mov	a,x
@@ -55,7 +55,7 @@ _longjmp:
 	mov	x,a
 	mov	a,[hl+0x03]
 	movw	sp,ax
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	mov	x,a
 	mov	a,[hl+0x01]
 	push	ax

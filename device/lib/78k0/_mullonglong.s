@@ -35,11 +35,10 @@ __mullonglong:
 	subw	ax,#0x0018
 	movw	sp,ax
 	movw	hl,ax
-	movw	ax,de
-	push	ax
+	push	de
 
 	mov	a,[hl+0x1c]
-	mov	[hl+0x00],a
+	mov	[hl],a
 	mov	a,[hl+0x1d]
 	mov	[hl+0x01],a
 	mov	a,[hl+0x1e]
@@ -82,96 +81,51 @@ __mullonglong:
 	mov	[hl+0x16],a
 	mov	[hl+0x17],a
 
-	mov	a,#0x40
-	mov	b,a
-
+	; Truncated base-256 schoolbook multiplication. For each source byte,
+	; only products below byte eight are accumulated.
+	mov	b,#0x00
 00001$:
-	mov	a,[hl+0x08]
-	and	a,#0x01
-	bz	00002$
-
-	mov	a,[hl+0x10]
-	add	a,[hl+0x00]
-	mov	[hl+0x10],a
-	mov	a,[hl+0x11]
-	addc	a,[hl+0x01]
-	mov	[hl+0x11],a
-	mov	a,[hl+0x12]
-	addc	a,[hl+0x02]
-	mov	[hl+0x12],a
-	mov	a,[hl+0x13]
-	addc	a,[hl+0x03]
-	mov	[hl+0x13],a
-	mov	a,[hl+0x14]
-	addc	a,[hl+0x04]
-	mov	[hl+0x14],a
-	mov	a,[hl+0x15]
-	addc	a,[hl+0x05]
-	mov	[hl+0x15],a
-	mov	a,[hl+0x16]
-	addc	a,[hl+0x06]
-	mov	[hl+0x16],a
-	mov	a,[hl+0x17]
-	addc	a,[hl+0x07]
-	mov	[hl+0x17],a
-
+	mov	a,[hl+b]
+	mov	e,a
+	mov	d,#0x00
+	mov	c,#0x08
 00002$:
-	clr1	cy
-	mov	a,[hl+0x0f]
-	rorc	a,1
-	mov	[hl+0x0f],a
-	mov	a,[hl+0x0e]
-	rorc	a,1
-	mov	[hl+0x0e],a
-	mov	a,[hl+0x0d]
-	rorc	a,1
-	mov	[hl+0x0d],a
-	mov	a,[hl+0x0c]
-	rorc	a,1
-	mov	[hl+0x0c],a
-	mov	a,[hl+0x0b]
-	rorc	a,1
-	mov	[hl+0x0b],a
-	mov	a,[hl+0x0a]
-	rorc	a,1
-	mov	[hl+0x0a],a
-	mov	a,[hl+0x09]
-	rorc	a,1
-	mov	[hl+0x09],a
-	mov	a,[hl+0x08]
-	rorc	a,1
-	mov	[hl+0x08],a
+	mov	a,[hl+c]
+	mov	x,a
+	mov	a,e
+	mulu	x
+	xch	a,d
+	add	a,x
+	mov	x,a
+	mov	a,d
+	addc	a,#0x00
+	mov	d,a
 
-	clr1	cy
-	mov	a,[hl+0x00]
-	rolc	a,1
-	mov	[hl+0x00],a
-	mov	a,[hl+0x01]
-	rolc	a,1
-	mov	[hl+0x01],a
-	mov	a,[hl+0x02]
-	rolc	a,1
-	mov	[hl+0x02],a
-	mov	a,[hl+0x03]
-	rolc	a,1
-	mov	[hl+0x03],a
-	mov	a,[hl+0x04]
-	rolc	a,1
-	mov	[hl+0x04],a
-	mov	a,[hl+0x05]
-	rolc	a,1
-	mov	[hl+0x05],a
-	mov	a,[hl+0x06]
-	rolc	a,1
-	mov	[hl+0x06],a
-	mov	a,[hl+0x07]
-	rolc	a,1
-	mov	[hl+0x07],a
+	; C addresses the multiplier; temporarily retarget it at result[B+C+8].
+	mov	a,c
+	add	a,b
+	add	a,#0x08
+	mov	c,a
+	mov	a,x
+	add	a,[hl+c]
+	mov	[hl+c],a
+	mov	a,d
+	addc	a,#0x00
+	mov	d,a
+	mov	a,c
+	sub	a,b
+	sub	a,#0x08
+	mov	c,a
+	inc	c
+	mov	a,c
+	add	a,b
+	cmp	a,#0x10
+	bc	00002$
 
-	dbnz	b,00003$
-	br	!00004$
-00003$:
-	br	!00001$
+	inc	b
+	mov	a,b
+	cmp	a,#0x08
+	bc	00001$
 
 00004$:
 	; Copy the product to the caller-provided return destination.
@@ -184,8 +138,7 @@ __mullonglong:
 	movw	de,ax
 	movw	ax,bc
 	movw	hl,ax
-	mov	a,#0x08
-	mov	b,a
+	mov	b,#0x08
 00005$:
 	mov	a,[de]
 	mov	[hl],a
@@ -196,7 +149,7 @@ __mullonglong:
 	; Restore DE and move the return address over the hidden pointer and arguments.
 	movw	ax,sp
 	movw	hl,ax
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	mov	x,a
 	mov	a,[hl+0x01]
 	movw	de,ax

@@ -33,8 +33,7 @@
 
 __divulong:
 	push	ax
-	movw	ax,de
-	push	ax
+	push	de
 	movw	ax,sp
 	subw	ax,#0x000d
 	movw	sp,ax
@@ -44,8 +43,7 @@ __divulong:
 
 __modulong:
 	push	ax
-	movw	ax,de
-	push	ax
+	push	de
 	movw	ax,sp
 	subw	ax,#0x000d
 	movw	sp,ax
@@ -60,7 +58,7 @@ __divmodulong:
 	mov	a,[hl+0x10]
 	mov	[hl+0x01],a
 	mov	a,x
-	mov	[hl+0x00],a
+	mov	[hl],a
 	mov	a,c
 	mov	[hl+0x02],a
 	mov	a,b
@@ -81,14 +79,54 @@ __divmodulong:
 	mov	a,[hl+0x16]
 	mov	[hl+0x0b],a
 
-	mov	a,#0x20
-	mov	b,a
+	; Divide one byte at a time when the divisor fits DIVUW's C operand.
+	mov	a,[hl+0x0b]
+	or	a,[hl+0x0a]
+	or	a,[hl+0x09]
+	bnz	00006$
+	mov	a,[hl+0x08]
+	cmp	a,#0x00
+	bz	00006$
+	mov	e,a
+	mov	d,#0x00
+	mov	b,#0x04
+00007$:
+	dec	b
+	mov	a,[hl+b]
+	mov	x,a
+	mov	a,e
+	mov	c,a
+	mov	a,d
+	divuw	c
+	mov	a,c
+	mov	d,a
+	mov	a,x
+	mov	[hl+b],a
+	mov	a,b
+	cmp	a,#0x00
+	bnz	00007$
+
+	mov	a,[hl+0x0c]
+	cmp	a,#0x00
+	bnz	00008$
+	br	!00005$
+00008$:
+	mov	a,d
+	mov	[hl],a
+	mov	a,#0x00
+	mov	[hl+0x01],a
+	mov	[hl+0x02],a
+	mov	[hl+0x03],a
+	br	!00005$
+
+00006$:
+	mov	b,#0x20
 
 00001$:
 	clr1	cy
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	rolc	a,1
-	mov	[hl+0x00],a
+	mov	[hl],a
 	mov	a,[hl+0x01]
 	rolc	a,1
 	mov	[hl+0x01],a
@@ -140,9 +178,9 @@ __divmodulong:
 	mov	a,[hl+0x07]
 	subc	a,[hl+0x0b]
 	mov	[hl+0x07],a
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	or	a,#0x01
-	mov	[hl+0x00],a
+	mov	[hl],a
 
 00002$:
 	dbnz	b,00001$
@@ -155,7 +193,7 @@ __divmodulong:
 
 00004$:
 	mov	a,[hl+0x04]
-	mov	[hl+0x00],a
+	mov	[hl],a
 	mov	a,[hl+0x05]
 	mov	[hl+0x01],a
 	mov	a,[hl+0x06]
@@ -170,12 +208,8 @@ __divmodulong:
 	movw	de,ax
 
 	mov	a,[hl+0x12]
-	mov	c,a
-	mov	a,c
 	mov	[hl+0x16],a
 	mov	a,[hl+0x11]
-	mov	c,a
-	mov	a,c
 	mov	[hl+0x15],a
 
 	movw	ax,sp
@@ -185,7 +219,7 @@ __divmodulong:
 	mov	c,a
 	mov	a,[hl+0x03]
 	mov	b,a
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	mov	x,a
 	mov	a,[hl+0x01]
 	ret

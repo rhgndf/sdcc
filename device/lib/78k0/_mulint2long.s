@@ -18,136 +18,110 @@ __mulint2long_common:
 	mov	c,a
 	push	de
 	movw	ax,sp
-	subw	ax,#0x000b
+	subw	ax,#0x0004
 	movw	sp,ax
 	movw	hl,ax
 
-	; Multiplicand, multiplier, result, and sign flag.
-	mov	a,[hl+0x0d]
-	mov	[hl+0x00],a
-	mov	a,[hl+0x0e]
+	; a0*b0 supplies the low word.
+	mov	a,[hl+0x06]
+	mov	x,a
+	mov	a,[hl+0x0a]
+	mulu	x
 	mov	[hl+0x01],a
+	mov	a,x
+	mov	[hl],a
 	mov	a,#0x00
 	mov	[hl+0x02],a
 	mov	[hl+0x03],a
-	mov	a,[hl+0x11]
-	mov	[hl+0x04],a
-	mov	a,[hl+0x12]
-	mov	[hl+0x05],a
-	mov	a,#0x00
-	mov	[hl+0x06],a
-	mov	[hl+0x07],a
-	mov	[hl+0x08],a
-	mov	[hl+0x09],a
-	mov	[hl+0x0a],a
 
-	; Convert signed operands to magnitudes and remember the result sign.
+	; Add a0*b1 and a1*b0, each shifted by one byte.
+	mov	a,[hl+0x06]
+	mov	x,a
+	mov	a,[hl+0x0b]
+	mulu	x
+	mov	e,a
+	mov	a,x
+	add	a,[hl+0x01]
+	mov	[hl+0x01],a
+	mov	a,e
+	addc	a,[hl+0x02]
+	mov	[hl+0x02],a
+	mov	a,#0x00
+	addc	a,[hl+0x03]
+	mov	[hl+0x03],a
+
+	mov	a,[hl+0x07]
+	mov	x,a
+	mov	a,[hl+0x0a]
+	mulu	x
+	mov	e,a
+	mov	a,x
+	add	a,[hl+0x01]
+	mov	[hl+0x01],a
+	mov	a,e
+	addc	a,[hl+0x02]
+	mov	[hl+0x02],a
+	mov	a,#0x00
+	addc	a,[hl+0x03]
+	mov	[hl+0x03],a
+
+	; The high-byte product is shifted by two bytes.
+	mov	a,[hl+0x07]
+	mov	x,a
+	mov	a,[hl+0x0b]
+	mulu	x
+	mov	e,a
+	mov	a,x
+	add	a,[hl+0x02]
+	mov	[hl+0x02],a
+	mov	a,e
+	addc	a,[hl+0x03]
+	mov	[hl+0x03],a
+
+	; Signed 16-bit operands are their unsigned bit patterns minus 2^16.
 	mov	a,c
 	cmp	a,#0x00
-	bz	00004$
-	mov	a,[hl+0x01]
-	and	a,#0x80
-	bz	00002$
-	mov	a,#0x00
-	sub	a,[hl+0x00]
-	mov	[hl+0x00],a
-	mov	a,#0x00
-	subc	a,[hl+0x01]
-	mov	[hl+0x01],a
-	mov	a,#0x01
-	mov	[hl+0x0a],a
-00002$:
-	mov	a,[hl+0x05]
-	and	a,#0x80
-	bz	00004$
-	mov	a,#0x00
-	sub	a,[hl+0x04]
-	mov	[hl+0x04],a
-	mov	a,#0x00
-	subc	a,[hl+0x05]
-	mov	[hl+0x05],a
-	mov	a,[hl+0x0a]
-	xor	a,#0x01
-	mov	[hl+0x0a],a
-
-00004$:
-	mov	a,#0x10
-	mov	b,a
-00005$:
-	mov	a,[hl+0x04]
-	and	a,#0x01
-	bz	00006$
-	mov	a,[hl+0x06]
-	add	a,[hl+0x00]
-	mov	[hl+0x06],a
+	bz	00003$
 	mov	a,[hl+0x07]
-	addc	a,[hl+0x01]
-	mov	[hl+0x07],a
-	mov	a,[hl+0x08]
-	addc	a,[hl+0x02]
-	mov	[hl+0x08],a
-	mov	a,[hl+0x09]
-	addc	a,[hl+0x03]
-	mov	[hl+0x09],a
-00006$:
-	clr1	cy
-	mov	a,[hl+0x05]
-	rorc	a,1
-	mov	[hl+0x05],a
-	mov	a,[hl+0x04]
-	rorc	a,1
-	mov	[hl+0x04],a
-	clr1	cy
-	mov	a,[hl+0x00]
-	rolc	a,1
-	mov	[hl+0x00],a
-	mov	a,[hl+0x01]
-	rolc	a,1
-	mov	[hl+0x01],a
+	and	a,#0x80
+	bz	00001$
 	mov	a,[hl+0x02]
-	rolc	a,1
+	sub	a,[hl+0x0a]
 	mov	[hl+0x02],a
 	mov	a,[hl+0x03]
-	rolc	a,1
+	subc	a,[hl+0x0b]
 	mov	[hl+0x03],a
-	dbnz	b,00005$
-
-	mov	a,[hl+0x0a]
-	cmp	a,#0x00
-	bz	00007$
-	mov	a,#0x00
+00001$:
+	mov	a,[hl+0x0b]
+	and	a,#0x80
+	bz	00003$
+	mov	a,[hl+0x02]
 	sub	a,[hl+0x06]
-	mov	[hl+0x06],a
-	mov	a,#0x00
+	mov	[hl+0x02],a
+	mov	a,[hl+0x03]
 	subc	a,[hl+0x07]
-	mov	[hl+0x07],a
-	mov	a,#0x00
-	subc	a,[hl+0x08]
-	mov	[hl+0x08],a
-	mov	a,#0x00
-	subc	a,[hl+0x09]
-	mov	[hl+0x09],a
-00007$:
+	mov	[hl+0x03],a
+00003$:
 
 	; Restore DE and move the return address over the stack argument.
-	mov	a,[hl+0x0b]
+	mov	a,[hl+0x04]
 	mov	x,a
-	mov	a,[hl+0x0c]
+	mov	a,[hl+0x05]
 	movw	de,ax
-	mov	a,[hl+0x0f]
-	mov	[hl+0x11],a
-	mov	a,[hl+0x10]
-	mov	[hl+0x12],a
+	mov	a,[hl+0x08]
+	mov	[hl+0x0a],a
+	mov	a,[hl+0x09]
+	mov	[hl+0x0b],a
 	movw	ax,sp
-	addw	ax,#0x0011
+	addw	ax,#0x000a
 	movw	sp,ax
 
 	; Return the product in BC:AX.
-	mov	a,[hl+0x08]
+	mov	a,[hl+0x02]
 	mov	c,a
-	mov	a,[hl+0x09]
+	mov	a,[hl+0x03]
 	mov	b,a
-	mov	a,[hl+0x06]
+	mov	a,[hl]
 	mov	x,a
-	mov	a,[hl+0x07]
+	mov	a,[hl+0x01]
 	ret

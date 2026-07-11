@@ -32,12 +32,10 @@
 
 __mulint:
 	movw	bc,ax
+	pop	hl
+	pop	ax
+	push	hl
 	push	de
-	movw	ax,sp
-	movw	hl,ax
-	mov	a,[hl+0x04]
-	mov	x,a
-	mov	a,[hl+0x05]
 	movw	de,ax
 
 	; Only the low product and two cross-product bytes affect a 16-bit result.
@@ -65,15 +63,6 @@ __mulint:
 	add	a,h
 	mov	h,a
 
-	mov	a,l
-	mov	x,a
-	mov	a,h
+	movw	ax,hl
 	pop	de
-	movw	bc,ax
-	pop	hl
-	movw	ax,sp
-	addw	ax,#0x0002
-	movw	sp,ax
-	push	hl
-	movw	ax,bc
 	ret

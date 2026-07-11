@@ -37,8 +37,7 @@ __divsint:
 	mov	b,a
 	mov	a,x
 	mov	c,a
-	movw	ax,de
-	push	ax
+	push	de
 	movw	ax,sp
 	subw	ax,#0x0006
 	movw	sp,ax
@@ -50,8 +49,7 @@ __modsint:
 	mov	b,a
 	mov	a,x
 	mov	c,a
-	movw	ax,de
-	push	ax
+	push	de
 	movw	ax,sp
 	subw	ax,#0x0006
 	movw	sp,ax
@@ -59,7 +57,7 @@ __modsint:
 	mov	a,#0x01
 
 __divmodsint:
-	mov	[hl+0x00],a
+	mov	[hl],a
 
 	cmp	a,#0x00
 	bnz	00001$
@@ -114,7 +112,7 @@ __divmodsint:
 	cmp	a,#0x00
 	bz	00009$
 	mov	c,a
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	cmp	a,#0x00
 	bnz	00010$
 	mov	a,[hl+0x02]
@@ -139,7 +137,7 @@ __divmodsint:
 	mov	a,[hl+0x05]
 	push	ax
 
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	cmp	a,#0x00
 	bnz	00005$
 	mov	a,[hl+0x02]
@@ -181,7 +179,7 @@ __divmodsint:
 00008$:
 	mov	[hl+0x01],a
 	mov	a,x
-	mov	[hl+0x00],a
+	mov	[hl],a
 
 	mov	a,[hl+0x06]
 	mov	x,a
@@ -189,18 +187,14 @@ __divmodsint:
 	movw	de,ax
 
 	mov	a,[hl+0x09]
-	mov	c,a
-	mov	a,c
 	mov	[hl+0x0b],a
 	mov	a,[hl+0x08]
-	mov	c,a
-	mov	a,c
 	mov	[hl+0x0a],a
 
 	movw	ax,sp
 	addw	ax,#0x000a
 	movw	sp,ax
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	mov	x,a
 	mov	a,[hl+0x01]
 	ret

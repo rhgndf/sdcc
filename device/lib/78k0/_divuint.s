@@ -35,8 +35,7 @@ __divuint:
 	mov	b,a
 	mov	a,x
 	mov	c,a
-	movw	ax,de
-	push	ax
+	push	de
 	movw	ax,sp
 	subw	ax,#0x0007
 	movw	sp,ax
@@ -48,8 +47,7 @@ __moduint:
 	mov	b,a
 	mov	a,x
 	mov	c,a
-	movw	ax,de
-	push	ax
+	push	de
 	movw	ax,sp
 	subw	ax,#0x0007
 	movw	sp,ax
@@ -60,7 +58,7 @@ __divmoduint:
 	mov	[hl+0x06],a
 
 	mov	a,c
-	mov	[hl+0x00],a
+	mov	[hl],a
 	mov	a,b
 	mov	[hl+0x01],a
 	mov	a,#0x00
@@ -78,7 +76,7 @@ __divmoduint:
 	cmp	a,#0x00
 	bz	00006$
 	mov	c,a
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	mov	x,a
 	mov	a,[hl+0x01]
 	divuw	c
@@ -96,14 +94,22 @@ __divmoduint:
 	br	!00005$
 
 00006$:
-	mov	a,#0x10
-	mov	b,a
+	; A divisor of at least 256 can produce only an 8-bit quotient. Seed the
+	; remainder with the dividend's high byte and process only its low byte.
+	mov	a,[hl+0x01]
+	mov	[hl+0x02],a
+	mov	a,[hl]
+	mov	[hl+0x01],a
+	mov	a,#0x00
+	mov	[hl],a
+	mov	[hl+0x03],a
+	mov	b,#0x08
 
 00001$:
 	clr1	cy
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	rolc	a,1
-	mov	[hl+0x00],a
+	mov	[hl],a
 	mov	a,[hl+0x01]
 	rolc	a,1
 	mov	[hl+0x01],a
@@ -129,9 +135,9 @@ __divmoduint:
 	mov	a,[hl+0x03]
 	subc	a,[hl+0x05]
 	mov	[hl+0x03],a
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	or	a,#0x01
-	mov	[hl+0x00],a
+	mov	[hl],a
 
 00002$:
 	dbnz	b,00001$
@@ -140,7 +146,7 @@ __divmoduint:
 	cmp	a,#0x00
 	bnz	00004$
 
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	mov	x,a
 	mov	a,[hl+0x01]
 	br	!00005$
@@ -153,7 +159,7 @@ __divmoduint:
 00005$:
 	mov	[hl+0x01],a
 	mov	a,x
-	mov	[hl+0x00],a
+	mov	[hl],a
 
 	mov	a,[hl+0x07]
 	mov	x,a
@@ -161,18 +167,14 @@ __divmoduint:
 	movw	de,ax
 
 	mov	a,[hl+0x0a]
-	mov	c,a
-	mov	a,c
 	mov	[hl+0x0c],a
 	mov	a,[hl+0x09]
-	mov	c,a
-	mov	a,c
 	mov	[hl+0x0b],a
 
 	movw	ax,sp
 	addw	ax,#0x000b
 	movw	sp,ax
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	mov	x,a
 	mov	a,[hl+0x01]
 	ret

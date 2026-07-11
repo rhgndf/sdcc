@@ -31,15 +31,12 @@
 	.area CODE
 
 _strnlen:
-	push	de
 	movw	hl,ax
-	movw	ax,sp
-	addw	ax,#0x0004
-	movw	de,ax
-	mov	a,[de]
-	mov	x,a
-	incw	de
-	mov	a,[de]
+	pop	ax
+	pop	bc
+	push	ax
+	push	de
+	movw	ax,bc
 	movw	de,ax
 	movw	bc,#0x0000
 
@@ -57,10 +54,5 @@ _strnlen:
 
 00002$:
 	pop	de
-	pop	hl
-	movw	ax,sp
-	addw	ax,#0x0002
-	movw	sp,ax
-	push	hl
 	movw	ax,bc
 	ret

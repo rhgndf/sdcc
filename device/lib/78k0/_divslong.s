@@ -33,8 +33,7 @@
 
 __divslong:
 	push	ax
-	movw	ax,de
-	push	ax
+	push	de
 	movw	ax,sp
 	subw	ax,#0x000e
 	movw	sp,ax
@@ -44,8 +43,7 @@ __divslong:
 
 __modslong:
 	push	ax
-	movw	ax,de
-	push	ax
+	push	de
 	movw	ax,sp
 	subw	ax,#0x000e
 	movw	sp,ax
@@ -62,7 +60,7 @@ __divmodslong:
 	mov	a,[hl+0x11]
 	mov	[hl+0x01],a
 	mov	a,x
-	mov	[hl+0x00],a
+	mov	[hl],a
 	mov	a,c
 	mov	[hl+0x02],a
 	mov	a,b
@@ -82,10 +80,10 @@ __divmodslong:
 	bz	00001$
 	mov	a,#0x01
 	mov	[hl+0x0d],a
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	xor	a,#0xff
 	add	a,#0x01
-	mov	[hl+0x00],a
+	mov	[hl],a
 	mov	a,[hl+0x01]
 	xor	a,#0xff
 	addc	a,#0x00
@@ -133,15 +131,13 @@ __divmodslong:
 	mov	[hl+0x05],a
 	mov	[hl+0x06],a
 	mov	[hl+0x07],a
-
-	mov	a,#0x20
-	mov	b,a
+	mov	b,#0x20
 
 00004$:
 	clr1	cy
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	rolc	a,1
-	mov	[hl+0x00],a
+	mov	[hl],a
 	mov	a,[hl+0x01]
 	rolc	a,1
 	mov	[hl+0x01],a
@@ -193,24 +189,22 @@ __divmodslong:
 	mov	a,[hl+0x07]
 	subc	a,[hl+0x0b]
 	mov	[hl+0x07],a
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	or	a,#0x01
-	mov	[hl+0x00],a
+	mov	[hl],a
 
 00005$:
 	dbnz	b,00004$
-
 	mov	a,[hl+0x0c]
 	cmp	a,#0x00
 	bnz	00008$
-
 	mov	a,[hl+0x0d]
 	cmp	a,#0x00
 	bz	00007$
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	xor	a,#0xff
 	add	a,#0x01
-	mov	[hl+0x00],a
+	mov	[hl],a
 	mov	a,[hl+0x01]
 	xor	a,#0xff
 	addc	a,#0x00
@@ -223,7 +217,6 @@ __divmodslong:
 	xor	a,#0xff
 	addc	a,#0x00
 	mov	[hl+0x03],a
-
 00007$:
 	br	!00010$
 
@@ -247,10 +240,9 @@ __divmodslong:
 	xor	a,#0xff
 	addc	a,#0x00
 	mov	[hl+0x07],a
-
 00009$:
 	mov	a,[hl+0x04]
-	mov	[hl+0x00],a
+	mov	[hl],a
 	mov	a,[hl+0x05]
 	mov	[hl+0x01],a
 	mov	a,[hl+0x06]
@@ -265,12 +257,8 @@ __divmodslong:
 	movw	de,ax
 
 	mov	a,[hl+0x13]
-	mov	c,a
-	mov	a,c
 	mov	[hl+0x17],a
 	mov	a,[hl+0x12]
-	mov	c,a
-	mov	a,c
 	mov	[hl+0x16],a
 
 	movw	ax,sp
@@ -280,7 +268,7 @@ __divmodslong:
 	mov	c,a
 	mov	a,[hl+0x03]
 	mov	b,a
-	mov	a,[hl+0x00]
+	mov	a,[hl]
 	mov	x,a
 	mov	a,[hl+0x01]
 	ret

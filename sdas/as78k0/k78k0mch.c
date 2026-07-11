@@ -220,6 +220,31 @@ check_even_direct (const struct expr *e)
     qerr ();
 }
 
+static void
+emit_relative_byte (struct expr *target)
+{
+  if (target->e_base.e_ap == dot.s_area)
+    {
+      const int displacement = (int)(target->e_addr - dot.s_addr - 1);
+
+      if (pass == 2 && (displacement < -128 || displacement > 127))
+        xerr ('a', "Branching range exceeded.");
+      outab (displacement);
+    }
+  else
+    {
+      if (!target->e_flag && !target->e_base.e_ap)
+        {
+          target->e_flag = 1;
+          target->e_base.e_sp = &sym[1];
+        }
+      outrb (target, R_PCR);
+    }
+
+  if (target->e_mode != S_USER)
+    rerr ();
+}
+
 static int
 bracket_operand (struct expr *e)
 {
@@ -472,7 +497,7 @@ emit_bit_branch (const struct bit_operand *b, struct expr *target, int low)
     {
       outab (0x8c | (b->bit << 4));
       emit_bit_addr (b);
-      outrb (target, R_PCR);
+      emit_relative_byte (target);
       return;
     }
 
@@ -498,7 +523,7 @@ emit_bit_branch (const struct bit_operand *b, struct expr *target, int low)
       qerr ();
       break;
     }
-  outrb (target, R_PCR);
+  emit_relative_byte (target);
 }
 
 static void
@@ -680,7 +705,7 @@ machine (struct mne *mp)
     case S_K78K0_CONDBR:
       expr (&e, 0);
       outab (mp->m_valu);
-      outrb (&e, R_PCR);
+      emit_relative_byte (&e);
       break;
 
     case S_K78K0_BITCY:
@@ -743,7 +768,7 @@ machine (struct mne *mp)
           comma (1);
           expr (&e, 0);
           outab (dst == K78K0_C ? 0x8a : 0x8b);
-          outrb (&e, R_PCR);
+          emit_relative_byte (&e);
         }
       else
         {
@@ -757,7 +782,7 @@ machine (struct mne *mp)
           outab (0x04);
           outrb (&e, R_USGN);
           expr (&e, 0);
-          outrb (&e, R_PCR);
+          emit_relative_byte (&e);
         }
       break;
 
@@ -1185,7 +1210,7 @@ machine (struct mne *mp)
             {
               expr (&e, 0);
               outab (0xfa);
-              outrb (&e, R_PCR);
+              emit_relative_byte (&e);
             }
         }
       break;

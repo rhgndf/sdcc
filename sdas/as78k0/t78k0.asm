@@ -251,3 +251,13 @@ pdf_branch_target:
 	di
 	halt
 	stop
+
+	; Stable PC-relative byte checks for the A.bit branch opcode class.
+	.area	FIXED (ABS)
+	.org	0x1000
+	bt	a.3,pdf_bt_a_done		; EXPECT: 31 3E 00
+pdf_bt_a_done:
+	bf	a.3,pdf_bf_a_done		; EXPECT: 31 3F 00
+pdf_bf_a_done:
+	btclr	a.3,pdf_btclr_a_done	; EXPECT: 31 3D 00
+pdf_btclr_a_done:

@@ -509,8 +509,7 @@ setAResult (const operand *op)
     clearAResult ();
 }
 
-static void mirrorWideReturnLowBytes (void);
-static void mirrorWideCallReturnBytes (int size);
+static void mirrorReturnRegisters (int size);
 static void loadWideReturnRegistersFromMirror (int size);
 static void saveScalarToReturnMirror (int size);
 static void restoreScalarFromReturnMirror (int size);
@@ -531,7 +530,7 @@ setReturnResult (const operand *op, const int size)
         }
 
       if (size > 2)
-        mirrorWideReturnLowBytes ();
+        mirrorReturnRegisters (2);
       if (size > 2 && storage != sym)
         {
           if (storeReturnMirrorToStack (storage, size))
@@ -592,20 +591,9 @@ wideReturnByteName (const int offset)
 }
 
 static void
-mirrorWideReturnLowBytes (void)
+mirrorReturnRegisters (const int size)
 {
-  emit2 ("movw", "de,ax");
-  emit2 ("mov", "a,e");
-  emit2 ("mov", "!%s,a", wideReturnByteName (0));
-  emit2 ("mov", "a,d");
-  emit2 ("mov", "!%s,a", wideReturnByteName (1));
-  emit2 ("movw", "ax,de");
-}
-
-static void
-mirrorWideCallReturnBytes (const int size)
-{
-  if (size <= 2 || size > K78K0_MAX_SCALAR_BYTES)
+  if (size < 2 || size > K78K0_MAX_SCALAR_BYTES)
     return;
 
   emit2 ("movw", "de,ax");
@@ -1456,6 +1444,26 @@ storeAToOperandByte (const operand *op, const int offset)
 }
 
 static bool
+storeSavedAXToStack (const symbol *sym)
+{
+  emit2 ("mov", "a,d");
+  if (!storeAToStackByte (sym, 1))
+    return false;
+
+  emit2 ("mov", "a,e");
+  return storeAToStackByte (sym, 0);
+}
+
+static void
+storeSavedAXToDirect (const symbol *sym)
+{
+  emit2 ("mov", "a,d");
+  storeAToDirectByte (sym, 1);
+  emit2 ("mov", "a,e");
+  storeAToDirectByte (sym, 0);
+}
+
+static bool
 storeAccumulatorToStack (const symbol *sym, const int size)
 {
   if (!sym->onStack || size < 1 || size > 2)
@@ -1468,11 +1476,7 @@ storeAccumulatorToStack (const symbol *sym, const int size)
     }
 
   ensureHLToSPPreservingAX ();
-  emit2 ("mov", "a,d");
-  if (!storeAToStackByte (sym, 1))
-    return false;
-  emit2 ("mov", "a,e");
-  if (!storeAToStackByte (sym, 0))
+  if (!storeSavedAXToStack (sym))
     return false;
   emit2 ("movw", "ax,de");
   return true;
@@ -1495,11 +1499,7 @@ storeReturnMirrorToStack (const symbol *sym, const int size)
         return false;
     }
 
-  emit2 ("mov", "a,d");
-  if (!storeAToStackByte (sym, 1))
-    return false;
-  emit2 ("mov", "a,e");
-  if (!storeAToStackByte (sym, 0))
+  if (!storeSavedAXToStack (sym))
     return false;
   emit2 ("movw", "ax,de");
   return true;
@@ -1523,10 +1523,7 @@ storeReturnRegistersToDirect (const symbol *sym, const int size)
       emit2 ("mov", "a,!%s", wideReturnByteName (offset));
       storeAToDirectByte (sym, offset);
     }
-  emit2 ("mov", "a,d");
-  storeAToDirectByte (sym, 1);
-  emit2 ("mov", "a,e");
-  storeAToDirectByte (sym, 0);
+  storeSavedAXToDirect (sym);
   emit2 ("movw", "ax,de");
   return true;
 }
@@ -1562,10 +1559,7 @@ storeReturnValueToDirect (const operand *right, const symbol *sym, const int siz
           emit2 ("mov", "a,!%s", wideReturnByteName (offset));
           storeAToDirectByte (sym, offset);
         }
-      emit2 ("mov", "a,d");
-      storeAToDirectByte (sym, 1);
-      emit2 ("mov", "a,e");
-      storeAToDirectByte (sym, 0);
+      storeSavedAXToDirect (sym);
       emit2 ("movw", "ax,de");
       clearAResult ();
       return true;
@@ -1588,11 +1582,7 @@ storeReturnValueToStack (const operand *right, const symbol *sym, const int size
   if (size == 2)
     {
       emit2 ("movw", "de,ax");
-      emit2 ("mov", "a,d");
-      if (!storeAToStackByte (sym, 1))
-        return false;
-      emit2 ("mov", "a,e");
-      if (!storeAToStackByte (sym, 0))
+      if (!storeSavedAXToStack (sym))
         return false;
       emit2 ("movw", "ax,de");
       clearAResult ();
@@ -1608,11 +1598,7 @@ storeReturnValueToStack (const operand *right, const symbol *sym, const int size
           if (!storeAToStackByte (sym, offset))
             return false;
         }
-      emit2 ("mov", "a,d");
-      if (!storeAToStackByte (sym, 1))
-        return false;
-      emit2 ("mov", "a,e");
-      if (!storeAToStackByte (sym, 0))
+      if (!storeSavedAXToStack (sym))
         return false;
       emit2 ("movw", "ax,de");
       clearAResult ();
@@ -1620,6 +1606,37 @@ storeReturnValueToStack (const operand *right, const symbol *sym, const int size
     }
 
   return false;
+}
+
+static bool
+storeOperandToSymbol (const operand *right, const symbol *sym, const int size)
+{
+  if (!sym || size > K78K0_MAX_SCALAR_BYTES || (!sym->onStack && !sym->rname[0]))
+    return false;
+
+  if (sym->onStack)
+    {
+      if (storeReturnValueToStack (right, sym, size))
+        return true;
+    }
+  else if (storeReturnValueToDirect (right, sym, size))
+    return true;
+
+  for (int offset = 0; offset < size; offset++)
+    {
+      if (!loadOperandByteToA (right, offset))
+        return false;
+
+      if (sym->onStack)
+        {
+          if (!storeAToStackByte (sym, offset))
+            return false;
+        }
+      else
+        storeAToDirectByte (sym, offset);
+    }
+
+  return true;
 }
 
 static operand *
@@ -1677,78 +1694,20 @@ genAssign (const iCode *ic)
       symbol *sym = OP_SYMBOL (result);
       const symbol *storage = operandStorageSymbol (result);
 
-      if (storage != sym)
+      if (storage == sym)
         {
-          rsym = storage;
-          size = k78k0_operandSize (result);
-          if (size > K78K0_MAX_SCALAR_BYTES)
-            return false;
-
-          if (rsym->onStack && storeReturnValueToStack (right, rsym, size))
-            {
-              restoreWideReturnStateIfUnrelated (saved_wide_return, result);
-              return true;
-            }
-
-          if (!rsym->onStack && storeReturnValueToDirect (right, rsym, size))
-            {
-              restoreWideReturnStateIfUnrelated (saved_wide_return, result);
-              return true;
-            }
-
-          for (int offset = 0; offset < size; offset++)
-            {
-              if (!loadOperandByteToA (right, offset))
-                return false;
-              if (rsym->onStack)
-                {
-                  if (!storeAToStackByte (rsym, offset))
-                    return false;
-                }
-              else
-                storeAToDirectByte (rsym, offset);
-            }
-
-          restoreWideReturnStateIfUnrelated (saved_wide_return, result);
+          sym->reqv = right;
           return true;
         }
 
-      sym->reqv = right;
-      return true;
+      rsym = storage;
     }
-
-  rsym = OP_SYMBOL_CONST (result);
-  if (!rsym->onStack && !rsym->rname[0])
-    return false;
+  else
+    rsym = OP_SYMBOL_CONST (result);
 
   size = k78k0_operandSize (result);
-  if (size > K78K0_MAX_SCALAR_BYTES)
+  if (!storeOperandToSymbol (right, rsym, size))
     return false;
-
-  if (rsym->onStack && storeReturnValueToStack (right, rsym, size))
-    {
-      restoreWideReturnStateIfUnrelated (saved_wide_return, result);
-      return true;
-    }
-
-  if (!rsym->onStack && storeReturnValueToDirect (right, rsym, size))
-    {
-      restoreWideReturnStateIfUnrelated (saved_wide_return, result);
-      return true;
-    }
-
-  for (int offset = 0; offset < size; offset++)
-    {
-      if (!loadOperandByteToA (right, offset))
-        return false;
-      if (rsym->onStack)
-        {
-          if (!storeAToStackByte (rsym, offset))
-            return false;
-        }
-      else
-        storeAToDirectByte (rsym, offset);
-    }
 
   restoreWideReturnStateIfUnrelated (saved_wide_return, result);
   return true;
@@ -1874,6 +1833,7 @@ genCast (const iCode *ic)
   operand *right = IC_RIGHT (ic);
   sym_link *result_type;
   sym_link *right_type;
+  bool normalize_or_truncate;
   unsigned top_byte_mask;
   int result_size;
   int right_size;
@@ -1890,8 +1850,12 @@ genCast (const iCode *ic)
   if (IS_BOOLEAN (result_type) && !IS_BOOLEAN (right_type))
     return genBooleanCast (result, right);
 
-  if (result_size < right_size && result_size >= 1 &&
-      right_size <= K78K0_MAX_SCALAR_BYTES)
+  normalize_or_truncate =
+    result_size >= 1 && result_size <= K78K0_MAX_SCALAR_BYTES &&
+    ((result_size < right_size && right_size <= K78K0_MAX_SCALAR_BYTES) ||
+     (result_size == right_size && top_byte_mask != 0xffu));
+
+  if (normalize_or_truncate)
     {
       if (result_size == 1)
         {
@@ -1987,38 +1951,6 @@ genCast (const iCode *ic)
       return setWideReturnResultFromMirror (result, result_size);
     }
 
-  if (top_byte_mask != 0xffu && result_size == right_size && result_size >= 1 && result_size <= K78K0_MAX_SCALAR_BYTES)
-    {
-      if (result_size == 1)
-        {
-          if (!loadOperandByteToA (right, 0))
-            return false;
-          normalizeBitIntTopByteInA (result);
-          setAResult (result);
-          return true;
-        }
-
-      if (result_size == 2)
-        {
-          if (!genOperandReturnValue (right))
-            return false;
-          normalizeBitIntTopByteInA (result);
-          setReturnResult (result, result_size);
-          return true;
-        }
-
-      for (int offset = 0; offset < result_size; offset++)
-        {
-          if (!loadOperandByteToA (right, offset))
-            return false;
-          if (offset == result_size - 1)
-            normalizeBitIntTopByteInA (result);
-          emit2 ("mov", "!%s,a", wideReturnByteName (offset));
-        }
-
-      return setWideReturnResultFromMirror (result, result_size);
-    }
-
   if (IS_ITEMP (result))
     {
       symbol *sym = OP_SYMBOL (result);
@@ -2029,26 +1961,7 @@ genCast (const iCode *ic)
           if (result_size < 1 || result_size > K78K0_MAX_SCALAR_BYTES || right_size != result_size)
             return false;
 
-          if (storage->onStack && storeReturnValueToStack (right, storage, result_size))
-            return true;
-
-          if (!storage->onStack && storeReturnValueToDirect (right, storage, result_size))
-            return true;
-
-          for (int offset = 0; offset < result_size; offset++)
-            {
-              if (!loadOperandByteToA (right, offset))
-                return false;
-              if (storage->onStack)
-                {
-                  if (!storeAToStackByte (storage, offset))
-                    return false;
-                }
-              else
-                storeAToDirectByte (storage, offset);
-            }
-
-          return true;
+          return storeOperandToSymbol (right, storage, result_size);
         }
     }
 
@@ -2784,7 +2697,7 @@ finishCall (const iCode *ic, sym_link *ftype, operand *result, const int result_
       operand *target;
 
       if (return_size > 2)
-        mirrorWideCallReturnBytes (return_size);
+        mirrorReturnRegisters (return_size);
 
       if (result_size == 1 && return_size > 1)
         emit2 ("mov", "a,x");

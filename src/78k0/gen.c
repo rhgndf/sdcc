@@ -1042,13 +1042,10 @@ loadStackToReturnValue (const symbol *sym, const int size)
         }
       else
         {
-          if (!loadStackByteToA (sym, 1))
-            return false;
-          emit2 ("mov", "b,a");
-          if (!loadStackByteToA (sym, 0))
-            return false;
+          setHLToStackOffset (offset);
+          emit2 ("mov", "a,[hl+0x00]");
           emit2 ("mov", "x,a");
-          emit2 ("mov", "a,b");
+          emit2 ("mov", "a,[hl+0x01]");
         }
     }
   else if (size <= K78K0_MAX_SCALAR_BYTES)
@@ -2804,11 +2801,13 @@ genCall (const iCode *ic)
   if (bigreturn)
     {
       first_regarg_size = functionFirstRegArgSize (ftype);
-      saveScalarToReturnMirror (first_regarg_size);
+      if (first_regarg_size)
+        emit2 ("movw", "de,ax");
       wassertl (result, "78K0 large-return call has no destination.");
       if (!pushBigReturnAddress (result))
         return false;
-      restoreScalarFromReturnMirror (first_regarg_size);
+      if (first_regarg_size)
+        emit2 ("movw", "ax,de");
     }
 
   if (IS_SYMOP (left))
@@ -2850,7 +2849,8 @@ genPcall (const iCode *ic)
     return false;
 
   first_regarg_size = functionFirstRegArgSize (ftype);
-  saveScalarToReturnMirror (first_regarg_size);
+  if (first_regarg_size)
+    emit2 ("movw", "de,ax");
 
   if (bigreturn)
     {
@@ -2862,14 +2862,14 @@ genPcall (const iCode *ic)
   if (!genOperandReturnValue (left))
     return false;
 
-  emit2 ("movw", "de,ax");
+  emit2 ("movw", "hl,ax");
   makeLocalLabel (return_label, sizeof (return_label));
   clearRegisterState ();
   emit2 ("movw", "ax,#%s", return_label);
   emit2 ("push", "ax");
-  emit2 ("movw", "ax,de");
-  emit2 ("push", "ax");
-  restoreScalarFromReturnMirror (first_regarg_size);
+  emit2 ("push", "hl");
+  if (first_regarg_size)
+    emit2 ("movw", "ax,de");
   emit2 ("ret", "");
   emitLocalLabel (return_label);
 

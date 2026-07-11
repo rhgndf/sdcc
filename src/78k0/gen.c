@@ -3656,16 +3656,18 @@ genWideVariableShift (const iCode *ic, const bool is_right, const bool is_signed
   target = wideAssignmentTarget (ic, result, size);
   if (!target)
     return true;
-  if (!copyOperandToTarget (left, target, size))
-    return false;
 
   if (!loadOperandByteToA (right, 0))
     return false;
   emit2 ("mov", "b,a");
 
+  if (!copyOperandToTarget (left, target, size))
+    return false;
+
   makeLocalLabel (loop_label, sizeof (loop_label));
   makeLocalLabel (done_label, sizeof (done_label));
 
+  emit2 ("mov", "a,b");
   emit2 ("cmp", "a,#0x00");
   emitCondBranch ("bz", done_label);
 

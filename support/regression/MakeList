@@ -63,8 +63,15 @@ EXCLUDE_78k0 += \
 	gcrypt-serpent \
 	serpent \
 	smallserpent \
+	tst_blake2s \
 	tst_bug-3129 \
-	tst_dilithium-ntt
+	tst_dilithium-ntt \
+	tst_gcc-torture-execute-pr91137 \
+	tst_sieve
+
+# Assumes an 8051-style __idata address space separate from program memory.
+EXCLUDE_78k0 += \
+	tst_bug2729218
 
 # The port has no restartable-sequence atomics.
 EXCLUDE_78k0 += \

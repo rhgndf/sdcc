@@ -1343,12 +1343,15 @@ storeReturnRegistersToDirect (const symbol *sym, const int size)
     }
 
   emit2 ("movw", "de,ax");
-  emit2 ("mov", "a,c");
-  storeAToDirectByte (sym, 2);
-  if (size == 4)
+  if (size >= 3)
     {
-      emit2 ("mov", "a,b");
-      storeAToDirectByte (sym, 3);
+      emit2 ("mov", "a,c");
+      storeAToDirectByte (sym, 2);
+      if (size == 4)
+        {
+          emit2 ("mov", "a,b");
+          storeAToDirectByte (sym, 3);
+        }
     }
   storeSavedAXToDirect (sym);
   emit2 ("movw", "ax,de");

@@ -2195,21 +2195,22 @@ genUnaryMinus (const iCode *ic)
       return finishWideAssignment (ic, result, target, size);
     }
 
-  if (!loadOperandByteToA (left, 0))
-    return false;
-  emit2 ("xor", "a,#0xff");
-  emit2 ("add", "a,#0x01");
-
   if (size == 1)
     {
+      if (!loadOperandByteToA (left, 0))
+        return false;
+      emit2 ("xor", "a,#0xff");
+      emit2 ("add", "a,#0x01");
       setAResult (result);
       return true;
     }
 
-  emit2 ("mov", "x,a");
-
-  if (!loadOperandByteToA (left, 1))
+  if (!genOperandReturnValue (left))
     return false;
+  emit2 ("xch", "a,x");
+  emit2 ("xor", "a,#0xff");
+  emit2 ("add", "a,#0x01");
+  emit2 ("xch", "a,x");
   emit2 ("xor", "a,#0xff");
   emit2 ("addc", "a,#0x00");
 

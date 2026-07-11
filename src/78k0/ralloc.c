@@ -181,6 +181,12 @@ createSpillSlot (symbol *sym, const int size)
   return slot;
 }
 
+static bool
+callResultNeedsHiddenDestination (const iCode *ic, const symbol *sym, const int size)
+{
+  return (ic->op == CALL || ic->op == PCALL) && (IS_STRUCT (sym->type) || size > 4);
+}
+
 void
 k78k0_assignRegisters (ebbIndex *ebbi)
 {
@@ -209,6 +215,7 @@ k78k0_assignRegisters (ebbIndex *ebbi)
       for (ic = ebbs[i]->sch; ic; ic = ic->next)
         {
           operand *result = IC_RESULT (ic);
+          bool hidden_call_result;
           symbol *sym;
           int size;
 
@@ -233,7 +240,9 @@ k78k0_assignRegisters (ebbIndex *ebbi)
 
           sym = OP_SYMBOL (result);
           size = getSize (sym->type);
-          if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || sym->remat || sym->usl.spillLoc || sym->liveTo <= ic->seq)
+          hidden_call_result = callResultNeedsHiddenDestination (ic, sym, size);
+          if (size < 1 || (!hidden_call_result && size > K78K0_MAX_SCALAR_BYTES) ||
+              sym->remat || sym->usl.spillLoc || (!hidden_call_result && sym->liveTo <= ic->seq))
             continue;
 
           sym->usl.spillLoc = createSpillSlot (sym, size);

@@ -1695,20 +1695,7 @@ genCast (const iCode *ic)
       if (SPEC_USIGN (getSpec (operandType (right))))
         emit2 ("mov", "a,#0x00");
       else
-        {
-          char positive_label[32];
-          char done_label[32];
-
-          makeLocalLabel (positive_label, sizeof (positive_label));
-          makeLocalLabel (done_label, sizeof (done_label));
-          emit2 ("cmp", "a,#0x80");
-          emit2 ("bc", "%s", positive_label);
-          emit2 ("mov", "a,#0xff");
-          emit2 ("br", "%s", done_label);
-          emitLocalLabel (positive_label);
-          emit2 ("mov", "a,#0x00");
-          emitLocalLabel (done_label);
-        }
+        emitSignMaskForA ();
 
       if (top_byte_mask != 0xffu)
         normalizeBitIntTopByteInA (result);

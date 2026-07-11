@@ -7,7 +7,7 @@ from pathlib import Path
 def assembler_mnemonics(path):
     return set(
         re.findall(
-            r'\{\s*NULL,\s*"([^".][^"]*)",\s*S_K78K0_',
+            r'\{\s*NULL,\s*"([^".][^"]*)",\s*S_78K0_',
             path.read_text(errors="ignore"),
         )
     )
@@ -64,7 +64,7 @@ def main():
     actual = listing_bytes(listing)
     emitted = emitted_source_lines(listing)
     instructions = fixture_instructions(source)
-    table_mnemonics = assembler_mnemonics(Path(__file__).with_name("k78k0pst.c"))
+    table_mnemonics = assembler_mnemonics(Path(__file__).with_name("78k0pst.c"))
     fixture_mnemonics = set(instructions.values())
     failures = []
 

@@ -1,5 +1,5 @@
 /*-------------------------------------------------------------------------
-  k78k0mch.c - 78K0 assembler machine support
+  78k0mch.c - 78K0 assembler machine support
 
   Copyright (C) 2026
 
@@ -11,7 +11,7 @@
 
 #include "sdas.h"
 #include "asxxxx.h"
-#include "k78k0.h"
+#include "78k0.h"
 
 char *cpu = "78k0";
 char *dsft = "asm";
@@ -667,38 +667,38 @@ machine (struct mne *mp)
 
   switch (mp->m_type)
     {
-    case S_K78K0_0OP:
+    case S_78K0_0OP:
       emit_opcode (mp->m_valu);
       break;
 
-    case S_K78K0_BYTE_ALU:
+    case S_78K0_BYTE_ALU:
       emit_byte_alu (mp->m_valu);
       break;
 
-    case S_K78K0_AX_IMM16:
+    case S_78K0_AX_IMM16:
       emit_ax_imm16 (mp->m_valu);
       break;
 
-    case S_K78K0_CONDBR:
+    case S_78K0_CONDBR:
       expr (&e, 0);
       outab (mp->m_valu);
       emit_relative_byte (&e);
       break;
 
-    case S_K78K0_BITCY:
+    case S_78K0_BITCY:
       if (getnb () != 'c' || getnb () != 'y')
         qerr ();
       outab (mp->m_valu);
       break;
 
-    case S_K78K0_BIT1:
+    case S_78K0_BIT1:
       {
         struct bit_operand bit = bit_operand ();
         emit_setclr_bit (&bit, mp->m_valu);
       }
       break;
 
-    case S_K78K0_BITMOV1:
+    case S_78K0_BITMOV1:
       {
         struct bit_operand dst_bit = bit_operand ();
 
@@ -720,7 +720,7 @@ machine (struct mne *mp)
       }
       break;
 
-    case S_K78K0_BITBR:
+    case S_78K0_BITBR:
       {
         struct bit_operand bit = bit_operand ();
 
@@ -730,12 +730,12 @@ machine (struct mne *mp)
       }
       break;
 
-    case S_K78K0_DIVUW:
+    case S_78K0_DIVUW:
       expect_reg (K78K0_C);
       emit_opcode (0x3182);
       break;
 
-    case S_K78K0_DBNZ:
+    case S_78K0_DBNZ:
       p = ip;
       dst = getreg ();
 
@@ -759,7 +759,7 @@ machine (struct mne *mp)
         }
       break;
 
-    case S_K78K0_INCDEC:
+    case S_78K0_INCDEC:
       p = ip;
       dst = getreg ();
       if (is_byte_reg (dst))
@@ -774,7 +774,7 @@ machine (struct mne *mp)
         }
       break;
 
-    case S_K78K0_INCWDECW:
+    case S_78K0_INCWDECW:
       dst = regpair_code (getreg ());
       if (dst < 0)
         {
@@ -784,7 +784,7 @@ machine (struct mne *mp)
       outab (mp->m_valu + (dst << 1));
       break;
 
-    case S_K78K0_MOV:
+    case S_78K0_MOV:
       dst = getreg ();
 
       if (dst == K78K0_A)
@@ -905,7 +905,7 @@ machine (struct mne *mp)
         qerr ();
       break;
 
-    case S_K78K0_MOVW:
+    case S_78K0_MOVW:
       dst = getreg ();
 
       if (dst >= 0)
@@ -987,16 +987,16 @@ machine (struct mne *mp)
         }
       break;
 
-    case S_K78K0_STACK:
+    case S_78K0_STACK:
       emit_stack_register (getreg (), (mp->m_valu >> 8) & 0xff, mp->m_valu & 0xff);
       break;
 
-    case S_K78K0_MULU:
+    case S_78K0_MULU:
       expect_reg (K78K0_X);
       emit_opcode (0x3188);
       break;
 
-    case S_K78K0_ROT:
+    case S_78K0_ROT:
       expect_reg (K78K0_A);
       comma (1);
       if (getnb () != '1')
@@ -1004,13 +1004,13 @@ machine (struct mne *mp)
       outab (mp->m_valu);
       break;
 
-    case S_K78K0_ROT4:
+    case S_78K0_ROT4:
       if (bracket_operand (&e) != K78K0_MEM_HL)
         qerr ();
       emit_opcode (mp->m_valu);
       break;
 
-    case S_K78K0_BR:
+    case S_78K0_BR:
       p = ip;
       if (getreg () == K78K0_AX)
         emit_opcode (0x3198);
@@ -1033,13 +1033,13 @@ machine (struct mne *mp)
         }
       break;
 
-    case S_K78K0_CALL:
+    case S_78K0_CALL:
       addr16expr (&e);
       outab (0x9a);
       outrw (&e, R_NORM);
       break;
 
-    case S_K78K0_CALLF:
+    case S_78K0_CALLF:
       addr16expr (&e);
       if (!is_abs (&e) || e.e_addr < 0x0800 || e.e_addr > 0x0fff)
         qerr ();
@@ -1047,7 +1047,7 @@ machine (struct mne *mp)
       outab (e.e_addr & 0xff);
       break;
 
-    case S_K78K0_CALLT:
+    case S_78K0_CALLT:
       if (getnb () != '[')
         qerr ();
       expr (&e, 0);
@@ -1058,7 +1058,7 @@ machine (struct mne *mp)
       outab (0xc1 | (e.e_addr & 0x3e));
       break;
 
-    case S_K78K0_SEL:
+    case S_78K0_SEL:
       src = getrb ();
       if (src < 0)
         qerr ();
@@ -1066,7 +1066,7 @@ machine (struct mne *mp)
       outab (0xd0 | ((src & 0x02) << 4) | ((src & 0x01) << 3));
       break;
 
-    case S_K78K0_XCH:
+    case S_78K0_XCH:
       expect_reg (K78K0_A);
       comma (1);
       c = getnb ();
@@ -1093,7 +1093,7 @@ machine (struct mne *mp)
         }
       break;
 
-    case S_K78K0_XCHW:
+    case S_78K0_XCHW:
       expect_reg (K78K0_AX);
       comma (1);
       src = regpair_code (getreg ());

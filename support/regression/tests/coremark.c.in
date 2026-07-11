@@ -2037,3 +2037,4 @@ void testCoremark(void)
 {
 }
 #endif
+

@@ -281,7 +281,6 @@ static inline uint64_t LOADBYTES(const uint8_t* bytes, int n) {
   return x;
 }
 
-
 /* store bytes from 64-bit Ascon word */
 static inline void STOREBYTES(uint8_t* bytes, uint64_t x, int n) {
   int i;
@@ -4879,3 +4878,4 @@ void testAscon(void)
   ASSERT(!memcmp(buf, pt, blen));
 #endif
 }
+

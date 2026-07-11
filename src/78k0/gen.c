@@ -3116,15 +3116,15 @@ savePointerToDE (const operand *op)
 }
 
 static bool
-getPointerOffset (const iCode *ic, unsigned long long *offset)
+getPointerOffset (const iCode *ic, long *offset)
 {
   operand *right = IC_RIGHT (ic);
 
   if (!right || !IS_OP_LITERAL (right))
     return false;
 
-  *offset = operandLitValueUll (right);
-  return *offset <= 255u;
+  *offset = (long)operandLitValue (right);
+  return *offset >= -65535l && *offset <= 65535l;
 }
 
 static bool
@@ -3189,7 +3189,38 @@ setHLFromDE (void)
 }
 
 static bool
-genPointerGetBitField (const operand *result, const operand *ptr, const unsigned pointer_offset, sym_link *type)
+savePointerToDEWithOffset (const operand *ptr, long *offset, const unsigned size)
+{
+  if (*offset >= 0 && (unsigned long)*offset + size <= 256u)
+    return savePointerToDE (ptr);
+
+  if (!genOperandReturnValue (ptr))
+    return false;
+
+  adjustAX ((int)*offset);
+  emit2 ("movw", "de,ax");
+  *offset = 0;
+  return true;
+}
+
+static bool
+loadPointerToHLWithOffset (const operand *ptr, long *offset, const unsigned size)
+{
+  if (*offset >= 0 && (unsigned long)*offset + size <= 256u)
+    return loadPointerToHL (ptr);
+
+  if (!genOperandReturnValue (ptr))
+    return false;
+
+  adjustAX ((int)*offset);
+  emit2 ("movw", "hl,ax");
+  clearHLState ();
+  *offset = 0;
+  return true;
+}
+
+static bool
+genPointerGetBitField (const operand *result, const operand *ptr, long pointer_offset, sym_link *type)
 {
   const int bit_start = SPEC_BSTR (type);
   const int bit_length = SPEC_BLEN (type);
@@ -3199,7 +3230,7 @@ genPointerGetBitField (const operand *result, const operand *ptr, const unsigned
 
   if (bit_start < 0 || bit_start > 7 || bit_length < 1 || bit_length > K78K0_MAX_SCALAR_BYTES * 8 ||
       result_size < 1 || result_size > K78K0_MAX_SCALAR_BYTES ||
-      pointer_offset + (unsigned)storage_size > 256u || !savePointerToDE (ptr))
+      !savePointerToDEWithOffset (ptr, &pointer_offset, (unsigned)storage_size))
     return false;
 
   for (int byte = 0; byte < result_size; byte++)
@@ -3207,7 +3238,7 @@ genPointerGetBitField (const operand *result, const operand *ptr, const unsigned
       const int remaining_bits = bit_length - byte * 8;
 
       setHLFromDE ();
-      emit2 ("mov", "a,[hl+0x%02x]", pointer_offset + (unsigned)byte);
+      emit2 ("mov", "a,[hl+0x%02x]", (unsigned)pointer_offset + (unsigned)byte);
 
       if (bit_start)
         {
@@ -3218,7 +3249,7 @@ genPointerGetBitField (const operand *result, const operand *ptr, const unsigned
           if (byte + 1 < storage_size)
             {
               setHLFromDE ();
-              emit2 ("mov", "a,[hl+0x%02x]", pointer_offset + (unsigned)byte + 1u);
+              emit2 ("mov", "a,[hl+0x%02x]", (unsigned)pointer_offset + (unsigned)byte + 1u);
               for (int shift = bit_start; shift < 8; shift++)
                 emitByteLeftShift ();
               emit2 ("or", "a,c");
@@ -3259,21 +3290,21 @@ genPointerGet (const iCode *ic)
   operand *result = IC_RESULT (ic);
   operand *left = IC_LEFT (ic);
   sym_link *bit_field_type;
-  unsigned long long offset;
+  long offset;
   int size;
 
   if (!IS_ITEMP (result) || !left || ic->op != GET_VALUE_AT_ADDRESS)
     return false;
 
   size = k78k0_operandSize (result);
-  if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || !getPointerOffset (ic, &offset) || offset + size > 256u)
+  if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || !getPointerOffset (ic, &offset))
     return false;
 
   bit_field_type = getSpec (operandType (result));
   if (IS_BITFIELD (bit_field_type))
-    return genPointerGetBitField (result, left, (unsigned)offset, bit_field_type);
+    return genPointerGetBitField (result, left, offset, bit_field_type);
 
-  if (!loadPointerToHL (left))
+  if (!loadPointerToHLWithOffset (left, &offset, (unsigned)size))
     return false;
 
   if (size == 1)

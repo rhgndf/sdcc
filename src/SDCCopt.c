@@ -3409,7 +3409,7 @@ offsetFoldGet (eBBlock **ebbs, int count)
   iCode *ic;
   iCode *uic;
 
-  if (!TARGET_Z80_LIKE && !TARGET_IS_STM8 && !TARGET_F8_LIKE)
+  if (!TARGET_Z80_LIKE && !TARGET_IS_STM8 && !TARGET_F8_LIKE && !TARGET_78K0_LIKE)
     return;
 
   for (i = 0; i < count; i++)
@@ -3461,7 +3461,7 @@ offsetFoldUse (eBBlock **ebbs, int count)
   iCode *ic;
   iCode *uic;
 
-  if (!(TARGET_Z80_LIKE && !TARGET_IS_SM83) && !TARGET_IS_STM8 && !TARGET_F8_LIKE) // All z80-related targets except sm83 support non-zero right operand. stm8 also supports it.
+  if (!(TARGET_Z80_LIKE && !TARGET_IS_SM83) && !TARGET_IS_STM8 && !TARGET_F8_LIKE && !TARGET_78K0_LIKE) // All z80-related targets except sm83 support non-zero right operand. stm8 and 78k0 also support it.
     return;
 
   for (i = 0; i < count; i++)
@@ -3959,7 +3959,7 @@ eBBlockFromiCode (iCode *ic)
   checkPurity (ic);                                        // Check purity - dead code elimination had a chance to eliminate any calls to impure functions by now.
   shortenLiveRanges (ic, ebbi);
   guessCounts (ic, ebbi);
-  if (optimize.lospre && (TARGET_Z80_LIKE || TARGET_HC08_LIKE || TARGET_IS_STM8 || TARGET_F8_LIKE)) /* For mcs51, we get a code size regression with lospre enabled, since the backend can't deal well with the added temporaries */
+  if (optimize.lospre && (TARGET_Z80_LIKE || TARGET_HC08_LIKE || TARGET_IS_STM8 || TARGET_F8_LIKE || TARGET_78K0_LIKE)) /* For mcs51, we get a code size regression with lospre enabled, since the backend can't deal well with the added temporaries */
     {
       lospre (ic, ebbi);
 
@@ -4114,4 +4114,3 @@ eBBlockFromiCode (iCode *ic)
 
   return NULL;
 }
-

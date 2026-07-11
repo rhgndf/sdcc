@@ -489,7 +489,7 @@ emit_bit_branch (const struct bit_operand *b, struct expr *target, int low)
       emit_bit_addr (b);
       break;
     case K78K0_BIT_A:
-      outab (0x80 | (b->bit << 4) | (low | 0x0c));
+      outab ((b->bit << 4) | (low | 0x0c));
       break;
     case K78K0_BIT_HL:
       outab (0x80 | (b->bit << 4) | (low == 0x06 ? low : low + 4));

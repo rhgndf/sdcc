@@ -15,6 +15,7 @@
 
 static int spill_slot_id;
 static set *spill_slots;
+bitVect *k78k0_partial_allocations;
 
 static void
 setRematerializable (operand *result, iCode *remat_ic)
@@ -179,7 +180,7 @@ isByteBinaryOperation (const int op)
 {
   return op == '+' || op == '-' || op == '*' || op == '/' || op == '%' ||
          op == BITWISEAND || op == '|' || op == '^' || op == LEFT_OP || op == RIGHT_OP ||
-         isComparison (op);
+         op == ROT || isComparison (op);
 }
 
 static bool
@@ -209,6 +210,12 @@ isRegisterSafeUse (const iCode *ic, const symbol *sym, const int size)
 
   if (size != 2)
     return false;
+
+  if (ic->op == CAST)
+    return uses_right;
+  if (ic->op == '!' || ic->op == UNARYMINUS || ic->op == GETBYTE ||
+      ic->op == GETWORD || ic->op == GETABIT)
+    return uses_left;
 
   if (ic->op == GET_VALUE_AT_ADDRESS || ic->op == SET_VALUE_AT_ADDRESS || ic->op == PCALL)
     return uses_left;
@@ -275,6 +282,8 @@ k78k0_assignRegisters (ebbIndex *ebbi)
 
   deleteSet (&spill_slots);
   spill_slot_id = 0;
+  freeBitVect (k78k0_partial_allocations);
+  k78k0_partial_allocations = NULL;
 
   for (int i = 0; i < count; i++)
     {
@@ -314,6 +323,8 @@ k78k0_assignRegisters (ebbIndex *ebbi)
     dumpEbbsToFileExt (DUMP_RASSGN, ebbi);
 
   gen78K0Code (ic_head);
+  freeBitVect (k78k0_partial_allocations);
+  k78k0_partial_allocations = NULL;
   deleteSet (&spill_slots);
   spill_slot_id = 0;
 }

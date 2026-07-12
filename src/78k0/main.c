@@ -236,6 +236,22 @@ k78k0_dwarfRegNum (const struct reg_info *reg)
 }
 
 static bool
+k78k0_isPromotedUnsignedByte (const iCode *ic)
+{
+  const operand *op = IC_RIGHT (ic);
+
+  if (!IS_SYMOP (op) || bitVectnBitsOn (OP_DEFS (op)) != 1)
+    return false;
+
+  const iCode *def = hTabItemWithKey (iCodehTab, bitVectFirstBit (OP_DEFS (op)));
+  if (!def || def->op != CAST || !IC_RIGHT (def))
+    return false;
+
+  sym_link *type = getSpec (operandType (IC_RIGHT (def)));
+  return getSize (type) == 1 && SPEC_USIGN (type);
+}
+
+static bool
 k78k0_hasNativeMulFor (iCode *ic, sym_link *left, sym_link *right)
 {
   const int result_size = IS_SYMOP (IC_RESULT (ic)) ? getSize (OP_SYM_TYPE (IC_RESULT (ic))) : 4;
@@ -245,8 +261,12 @@ k78k0_hasNativeMulFor (iCode *ic, sym_link *left, sym_link *right)
       if (ic->op != '/' && ic->op != '%')
         return false;
 
-      return getSize (left) == 1 && getSize (right) == 1 &&
-        SPEC_USIGN (getSpec (left)) && SPEC_USIGN (getSpec (right));
+      if (getSize (left) > 2 || !SPEC_USIGN (getSpec (left)))
+        return false;
+
+      return IS_LITERAL (right) ? ulFromVal (valFromType (right)) <= 255 :
+        getSize (right) == 1 && SPEC_USIGN (getSpec (right)) ||
+        k78k0_isPromotedUnsignedByte (ic);
     }
 
   if (IS_BITINT (OP_SYM_TYPE (IC_RESULT (ic))) && SPEC_BITINTWIDTH (OP_SYM_TYPE (IC_RESULT (ic))) % 8)
@@ -264,10 +284,21 @@ k78k0_hasNativeMulFor (iCode *ic, sym_link *left, sym_link *right)
 static bool
 k78k0_hasExtBitOp (int op, sym_link *left, int right)
 {
-  (void)op;
-  (void)left;
-  (void)right;
-  return false;
+  const int size = getSize (left);
+
+  switch (op)
+    {
+    case GETABIT:
+      return right >= 0 && right < bitsForType (left);
+    case GETBYTE:
+      return right >= 0 && !(right % 8) && right / 8 < size;
+    case GETWORD:
+      return right >= 0 && !(right % 8) && right / 8 + 2 <= size;
+    case ROT:
+      return bitsForType (left) == 8;
+    default:
+      return false;
+    }
 }
 
 PORT k78k0_port =

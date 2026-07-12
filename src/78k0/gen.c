@@ -80,6 +80,9 @@ static bool
 storeReturnRegistersToSymbol (const symbol *sym, int size);
 
 static bool
+storeAToOperandByte (const operand *op, int offset);
+
+static bool
 symbolIsSfr (const symbol *sym)
 {
   return sym && sym->etype && SPEC_SCLS (sym->etype) == S_SFR;
@@ -115,7 +118,8 @@ operandStorageSymbol (const operand *op)
 static const reg_info *
 symbolRegisterByte (const symbol *sym, const int offset)
 {
-  if (!sym || sym->isspilt || offset < 0 || offset >= sym->nRegs)
+  if (!sym || (sym->isspilt && !bitVectBitValue (k78k0_partial_allocations, sym->key)) ||
+      offset < 0 || offset >= sym->nRegs)
     return NULL;
 
   return sym->regs[offset];
@@ -153,9 +157,36 @@ symbolRegisterPair (const symbol *sym)
 }
 
 static bool
-operandIsAllocated (const operand *op)
+operandHasAllocatedByte (const operand *op)
 {
-  return IS_SYMOP (op) && symbolRegisterByte (OP_SYMBOL_CONST (op), 0);
+  if (!IS_SYMOP (op))
+    return false;
+
+  const symbol *sym = OP_SYMBOL_CONST (op);
+  for (int offset = 0; offset < sym->nRegs; offset++)
+    if (symbolRegisterByte (sym, offset))
+      return true;
+
+  return false;
+}
+
+static bool
+symbolUsesReturnLayout (const symbol *sym, const int size)
+{
+  static const int return_registers[] = {
+    K78K0_RB0_X_IDX, K78K0_RB0_A_IDX, K78K0_RB0_C_IDX, K78K0_RB0_B_IDX
+  };
+
+  if (!sym || size < 1 || size > K78K0_REGISTER_RETURN_BYTES)
+    return false;
+
+  for (int offset = 0; offset < size; offset++)
+    {
+      const reg_info *reg = symbolRegisterByte (sym, offset);
+      if (!reg || reg->rIdx != return_registers[offset])
+        return false;
+    }
+  return true;
 }
 
 static const operand *resolveReqvOperand (const operand *op);
@@ -163,7 +194,7 @@ static const operand *resolveReqvOperand (const operand *op);
 static const operand *
 resolveCodegenOperand (const operand *op)
 {
-  return operandIsAllocated (op) ? op : resolveReqvOperand (op);
+  return operandHasAllocatedByte (op) ? op : resolveReqvOperand (op);
 }
 
 static void
@@ -189,7 +220,7 @@ storeReturnValueToAllocatedOperand (const operand *op, const int size)
 {
   const symbol *sym;
 
-  if (!operandIsAllocated (op) || size < 1 || size > K78K0_REGISTER_RETURN_BYTES)
+  if (!operandHasAllocatedByte (op) || size < 1 || size > K78K0_REGISTER_RETURN_BYTES)
     return false;
 
   sym = OP_SYMBOL_CONST (op);
@@ -211,13 +242,31 @@ storeReturnValueToAllocatedOperand (const operand *op, const int size)
       return true;
     }
 
-  /* Three- and four-byte allocations use the ABI C:AX / BC:AX layout. */
-  const bool canonical = symbolRegisterByte (sym, 0)->rIdx == K78K0_RB0_X_IDX &&
-                         symbolRegisterByte (sym, 1)->rIdx == K78K0_RB0_A_IDX &&
-                         symbolRegisterByte (sym, 2)->rIdx == K78K0_RB0_C_IDX &&
-                         (size == 3 || symbolRegisterByte (sym, 3)->rIdx == K78K0_RB0_B_IDX);
+  if (symbolUsesReturnLayout (sym, size))
+    {
+      clearReturnValueState ();
+      return true;
+    }
+
+  emit2 ("movw", "de,ax");
+  emit2 ("mov", "a,c");
+  if (!storeAToOperandByte (op, 2))
+    return false;
+  if (size == 4)
+    {
+      emit2 ("mov", "a,b");
+      if (!storeAToOperandByte (op, 3))
+        return false;
+    }
+  emit2 ("mov", "a,d");
+  if (!storeAToOperandByte (op, 1))
+    return false;
+  emit2 ("mov", "a,e");
+  if (!storeAToOperandByte (op, 0))
+    return false;
+
   clearReturnValueState ();
-  return canonical;
+  return true;
 }
 
 static const operand *
@@ -467,6 +516,12 @@ k78k0_operandSize (const operand *op)
   return op && IS_ITEMP (op) && op->isaddr ? 2 : getSize (operandType (op));
 }
 
+static bool
+isScalarSize (const int size)
+{
+  return size >= 1 && size <= K78K0_MAX_SCALAR_BYTES;
+}
+
 static unsigned long long
 operandLitValueBits (const operand *op)
 {
@@ -493,15 +548,17 @@ operandLitValueBits (const operand *op)
   return operandLitValueUll (op);
 }
 
+static sym_link *
+functionType (sym_link *type)
+{
+  return type && IS_FUNCPTR (type) ? type->next : type;
+}
+
 static bool
 typeReturnsViaHiddenPointer (sym_link *type)
 {
-  sym_link *ftype;
+  sym_link *ftype = functionType (type);
 
-  if (!type)
-    return false;
-
-  ftype = IS_FUNCPTR (type) ? type->next : type;
   return ftype && ftype->next &&
          (IS_STRUCT (ftype->next) || getSize (ftype->next) > K78K0_REGISTER_RETURN_BYTES);
 }
@@ -740,6 +797,14 @@ moveReturnAddressForCalleeCleanup (const int cleanup_bytes)
 }
 
 static void
+loadWordAtHLToAX (void)
+{
+  emit2 ("mov", "a,[hl+0x00]");
+  emit2 ("mov", "x,a");
+  emit2 ("mov", "a,[hl+0x01]");
+}
+
+static void
 emitWideRegisterReturnEpilogue (const int frame_bytes, const int cleanup_bytes)
 {
   emit2 ("movw", "de,ax");
@@ -747,9 +812,7 @@ emitWideRegisterReturnEpilogue (const int frame_bytes, const int cleanup_bytes)
   emit2 ("movw", "ax,sp");
   adjustAX (frame_bytes);
   emit2 ("movw", "hl,ax");
-  emit2 ("mov", "a,[hl+0x00]");
-  emit2 ("mov", "x,a");
-  emit2 ("mov", "a,[hl+0x01]");
+  loadWordAtHLToAX ();
   emit2 ("movw", "hl,ax");
 
   emit2 ("movw", "ax,sp");
@@ -760,9 +823,7 @@ emitWideRegisterReturnEpilogue (const int frame_bytes, const int cleanup_bytes)
   emit2 ("movw", "ax,sp");
   adjustAX (-(frame_bytes + cleanup_bytes));
   emit2 ("movw", "hl,ax");
-  emit2 ("mov", "a,[hl+0x00]");
-  emit2 ("mov", "x,a");
-  emit2 ("mov", "a,[hl+0x01]");
+  loadWordAtHLToAX ();
   emit2 ("xchw", "ax,de");
 }
 
@@ -1219,12 +1280,21 @@ isUnsignedByteSource (const operand *op)
 }
 
 static bool
-isUnsignedByteDivisor (const operand *op)
+isUnsignedByteDivisor (const iCode *ic)
 {
+  const operand *op = IC_RIGHT (ic);
+
   if (isUnsignedByteSource (op))
     return true;
 
-  return IS_OP_LITERAL (op) && operandLitValueUll (op) <= 0xffu;
+  if (IS_OP_LITERAL (op))
+    return operandLitValueUll (op) <= 0xffu;
+
+  if (!IS_SYMOP (op) || bitVectnBitsOn (OP_DEFS (op)) != 1)
+    return false;
+
+  const iCode *def = hTabItemWithKey (iCodehTab, bitVectFirstBit (OP_DEFS (op)));
+  return def && def->op == CAST && IC_RIGHT (def) && isUnsignedByteSource (IC_RIGHT (def));
 }
 
 static bool
@@ -1445,7 +1515,7 @@ storeAllocatedOperandToSymbol (const operand *right, const symbol *sym, const in
 {
   static const int order[] = {1, 0, 2, 3};
 
-  if (!operandIsAllocated (right) || size < 1 || size > K78K0_REGISTER_RETURN_BYTES)
+  if (!operandHasAllocatedByte (right) || size < 1 || size > K78K0_REGISTER_RETURN_BYTES)
     return false;
 
   if (sym->onStack)
@@ -1511,7 +1581,7 @@ wideAssignmentTarget (const iCode *ic, const operand *result, const int size)
   if (!IS_ITEMP (result))
     return NULL;
 
-  if (operandIsAllocated (result))
+  if (operandHasAllocatedByte (result))
     return (operand *)result;
 
   if (next && next->op == '=' && !POINTER_SET (next))
@@ -1547,7 +1617,7 @@ copyToAllocatedOperand (const operand *result, const operand *right, const int s
   const symbol *destination = OP_SYMBOL_CONST (result);
 
   right = resolveCodegenOperand (right);
-  if (IS_SYMOP (right) && operandIsAllocated (right))
+  if (IS_SYMOP (right) && operandHasAllocatedByte (right))
     {
       const symbol *source = OP_SYMBOL_CONST (right);
 
@@ -1581,8 +1651,7 @@ copyToAllocatedOperand (const operand *result, const operand *right, const int s
           return true;
         }
 
-      /* Wider allocated values have one canonical layout. */
-      if (size <= K78K0_REGISTER_RETURN_BYTES)
+      if (symbolUsesReturnLayout (source, size) && symbolUsesReturnLayout (destination, size))
         return true;
     }
 
@@ -1613,7 +1682,7 @@ genAssign (const iCode *ic)
       const symbol *storage = operandStorageSymbol (result);
 
       size = k78k0_operandSize (result);
-      if (operandIsAllocated (result))
+      if (operandHasAllocatedByte (result))
         return copyToAllocatedOperand (result, right, size);
 
       if (storage == sym)
@@ -1628,10 +1697,7 @@ genAssign (const iCode *ic)
     rsym = OP_SYMBOL_CONST (result);
 
   size = k78k0_operandSize (result);
-  if (!storeOperandToSymbol (right, rsym, size))
-    return false;
-
-  return true;
+  return storeOperandToSymbol (right, rsym, size);
 }
 
 static bool
@@ -1640,12 +1706,12 @@ testOperandForZero (const operand *op)
   const int size = k78k0_operandSize (op);
   const bool is_float = IS_FLOAT (getSpec (operandType (op)));
 
-  if (size < 1 || size > K78K0_MAX_SCALAR_BYTES)
+  if (!isScalarSize (size))
     return false;
 
-  if (size == 2 && (operandInReturnValue (op, size) || operandIsAllocated (op)))
+  if (size == 2 && (operandInReturnValue (op, size) || operandHasAllocatedByte (op)))
     {
-      if (operandIsAllocated (op) && !loadOperandLowWordToAX (op))
+      if (operandHasAllocatedByte (op) && !loadOperandLowWordToAX (op))
         return false;
       emit2 ("cmpw", "ax,#0x0000");
       return true;
@@ -1765,70 +1831,53 @@ normalizeBitIntTopByteInA (const operand *op)
 }
 
 static bool
-genCast (const iCode *ic)
+genNormalizedCast (const iCode *ic, const operand *result, const operand *right,
+                   const int result_size, const unsigned top_byte_mask)
 {
-  operand *result = IC_RESULT (ic);
-  operand *right = IC_RIGHT (ic);
   operand *target;
-  bool normalize_or_truncate;
-  unsigned top_byte_mask;
-  int result_size;
-  int right_size;
 
-  if (!IS_ITEMP (result) || !right)
-    return false;
-
-  result_size = k78k0_operandSize (result);
-  right_size = k78k0_operandSize (right);
-  top_byte_mask = bitIntTopByteMask (result);
-
-  if (IS_BOOLEAN (operandType (result)) && !IS_BOOLEAN (operandType (right)))
-    return genBooleanCast (result, right);
-
-  normalize_or_truncate =
-    result_size >= 1 && result_size <= K78K0_MAX_SCALAR_BYTES &&
-    ((result_size < right_size && right_size <= K78K0_MAX_SCALAR_BYTES) ||
-     (result_size == right_size && top_byte_mask != 0xffu));
-
-  if (normalize_or_truncate)
+  if (result_size <= 2)
     {
-      if (result_size == 1)
-        {
-          if (!loadOperandByteToA (right, 0))
-            return false;
-          if (top_byte_mask != 0xffu)
-            normalizeBitIntTopByteInA (result);
-          setAResult (result);
-          return true;
-        }
+      const bool loaded = result_size == 1 ? loadOperandByteToA (right, 0) :
+                                             loadOperandLowWordToAX (right);
 
-      if (result_size == 2)
-        {
-          if (!loadOperandLowWordToAX (right))
-            return false;
-          if (top_byte_mask != 0xffu)
-            normalizeBitIntTopByteInA (result);
-          setReturnResult (result, result_size);
-          return true;
-        }
-
-      target = wideAssignmentTarget (ic, result, result_size);
-      if (!target)
-        return true;
-      for (int offset = 0; offset < result_size; offset++)
-        {
-          if (!loadOperandByteToA (right, offset))
-            return false;
-          if (offset == result_size - 1 && top_byte_mask != 0xffu)
-            normalizeBitIntTopByteInA (result);
-          if (!storeAToOperandByte (target, offset))
-            return false;
-        }
-
-      return finishWideAssignment (ic, result, target);
+      if (!loaded)
+        return false;
+      if (top_byte_mask != 0xffu)
+        normalizeBitIntTopByteInA (result);
+      setReturnResult (result, result_size);
+      return true;
     }
 
-  if (result_size == 2 && right_size == 1)
+  target = wideAssignmentTarget (ic, result, result_size);
+  if (!target)
+    return true;
+  for (int offset = 0; offset < result_size; offset++)
+    {
+      if (!loadOperandByteToA (right, offset))
+        return false;
+      if (offset == result_size - 1 && top_byte_mask != 0xffu)
+        normalizeBitIntTopByteInA (result);
+      if (!storeAToOperandByte (target, offset))
+        return false;
+    }
+
+  return finishWideAssignment (ic, result, target);
+}
+
+static bool
+genWideningCast (const iCode *ic, const operand *result, const operand *right,
+                 const int result_size, const int right_size, const unsigned top_byte_mask)
+{
+  operand *target;
+  const operand *source;
+  const char *source_pair;
+  bool stack_target;
+  bool save_byte;
+  bool save_ax;
+  int offset;
+
+  if (result_size == 2)
     {
       if (!loadOperandByteToA (right, 0))
         return false;
@@ -1846,61 +1895,181 @@ genCast (const iCode *ic)
       return true;
     }
 
-  if (result_size > 2 && result_size <= K78K0_MAX_SCALAR_BYTES &&
-      right_size >= 1 && right_size < result_size && right_size <= K78K0_MAX_SCALAR_BYTES)
-    {
-      int offset;
+  source = resolveCodegenOperand (right);
+  source_pair = right_size == 2 && IS_SYMOP (source) ?
+    symbolRegisterPair (OP_SYMBOL_CONST (source)) : NULL;
 
-      target = wideAssignmentTarget (ic, result, result_size);
-      if (!target)
-        return true;
-      for (offset = 0; offset < right_size; offset++)
+  target = wideAssignmentTarget (ic, result, result_size);
+  if (!target)
+    return true;
+
+  stack_target = operandNeedsStackHL (target, result_size);
+  save_byte = right_size == 1 && stack_target && operandRegisterByte (source, 0);
+  save_ax = source_pair && !strcmp (source_pair, "ax");
+
+  if (save_byte)
+    {
+      if (!loadOperandByteToA (source, 0))
+        return false;
+      emit2 ("mov", "d,a");
+      if (!storeAToOperandByte (target, 0))
+        return false;
+    }
+  else if (save_ax)
+    {
+      emit2 ("movw", "de,ax");
+      emit2 ("mov", "a,e");
+      if (!storeAToOperandByte (target, 0))
+        return false;
+      emit2 ("mov", "a,d");
+      if (!storeAToOperandByte (target, 1))
+        return false;
+    }
+  else
+    for (offset = 0; offset < right_size; offset++)
+      if (!loadOperandByteToA (source, offset) || !storeAToOperandByte (target, offset))
+        return false;
+
+  if (SPEC_USIGN (getSpec (operandType (source))))
+    emit2 ("mov", "a,#0x00");
+  else if (save_byte || save_ax)
+    {
+      emit2 ("mov", "a,d");
+      emitSignMaskForA ();
+    }
+  else
+    {
+      if (!loadOperandByteToA (source, right_size - 1))
+        return false;
+      emitSignMaskForA ();
+    }
+
+  for (offset = right_size; offset < result_size; offset++)
+    {
+      if (offset == result_size - 1 && top_byte_mask != 0xffu)
+        normalizeBitIntTopByteInA (result);
+      if (!storeAToOperandByte (target, offset))
+        return false;
+    }
+
+  return finishWideAssignment (ic, result, target);
+}
+
+static bool
+genCast (const iCode *ic)
+{
+  operand *result = IC_RESULT (ic);
+  operand *right = IC_RIGHT (ic);
+  symbol *sym;
+  const symbol *storage;
+  bool scalar_sizes;
+  unsigned top_byte_mask;
+  int result_size;
+  int right_size;
+
+  if (!IS_ITEMP (result) || !right)
+    return false;
+
+  result_size = k78k0_operandSize (result);
+  right_size = k78k0_operandSize (right);
+  top_byte_mask = bitIntTopByteMask (result);
+  scalar_sizes = isScalarSize (result_size) && isScalarSize (right_size);
+
+  if (IS_BOOLEAN (operandType (result)) && !IS_BOOLEAN (operandType (right)))
+    return genBooleanCast (result, right);
+
+  if (scalar_sizes &&
+      (result_size < right_size || (result_size == right_size && top_byte_mask != 0xffu)))
+    return genNormalizedCast (ic, result, right, result_size, top_byte_mask);
+
+  if (scalar_sizes && right_size < result_size)
+    return genWideningCast (ic, result, right, result_size, right_size, top_byte_mask);
+
+  sym = OP_SYMBOL (result);
+  storage = operandStorageSymbol (result);
+
+  if (operandHasAllocatedByte (result))
+    return result_size == right_size && copyToAllocatedOperand (result, right, result_size);
+
+  if (storage != sym)
+    {
+      if (!scalar_sizes || right_size != result_size)
+        return false;
+
+      return storeOperandToSymbol (right, storage, result_size);
+    }
+
+  sym->reqv = right;
+  return true;
+}
+
+static bool
+genWideBinaryAccumulatorOp (const iCode *ic, const operand *result, const operand *left,
+                            const operand *right, const int size, const char *low_mnemonic,
+                            const char *high_mnemonic, const bool uses_carry)
+{
+  operand *target = wideAssignmentTarget (ic, result, size);
+  const int right_size = k78k0_operandSize (right);
+
+  if (!target)
+    return true;
+  if (k78k0_operandSize (left) != size || right_size > size)
+    return false;
+  if (right_size != size && !IS_OP_LITERAL (right) && !SPEC_USIGN (getSpec (operandType (right))))
+    return false;
+
+  if (operandNeedsStackHL (left, size) || operandNeedsStackHL (right, size) ||
+      operandNeedsStackHL (target, size))
+    setHLToSP ();
+
+  for (int offset = 0; offset < size; offset++)
+    {
+      if (uses_carry)
         {
+          if (!loadOperandByteToA (left, offset))
+            return false;
+          emit2 ("mov", "c,a");
           if (!loadOperandByteToA (right, offset))
             return false;
-          if (!storeAToOperandByte (target, offset))
-            return false;
-        }
+          emit2 ("mov", "b,a");
+          emit2 ("mov", "a,c");
 
-      if (SPEC_USIGN (getSpec (operandType (right))))
-        emit2 ("mov", "a,#0x00");
+          if (offset)
+            {
+              emit2 ("pop", "psw");
+              stack_pushed--;
+              clearHLState ();
+            }
+
+          emit2 (offset ? high_mnemonic : low_mnemonic, "a,b");
+        }
       else
         {
-          if (!loadOperandByteToA (right, right_size - 1))
+          if (!loadOperandByteToA (left, offset))
             return false;
-          emitSignMaskForA ();
+
+          if (operandByteOnStack (right, offset))
+            ensureHLToSPPreservingAX ();
+
+          if (!aluOperandByteToA (offset ? high_mnemonic : low_mnemonic, right, offset))
+            return false;
         }
 
-      for (; offset < result_size; offset++)
+      if (offset == size - 1)
+        maskUnsignedBitIntTopByteInA (result);
+
+      if (uses_carry && offset != size - 1)
         {
-          if (offset == result_size - 1 && top_byte_mask != 0xffu)
-            normalizeBitIntTopByteInA (result);
-          if (!storeAToOperandByte (target, offset))
-            return false;
+          emit2 ("push", "psw");
+          stack_pushed++;
+          clearHLState ();
         }
 
-      return finishWideAssignment (ic, result, target);
+      if (!storeAToOperandByte (target, offset))
+        return false;
     }
 
-  if (IS_ITEMP (result))
-    {
-      symbol *sym = OP_SYMBOL (result);
-      const symbol *storage = operandStorageSymbol (result);
-
-      if (operandIsAllocated (result))
-        return result_size == right_size && copyToAllocatedOperand (result, right, result_size);
-
-      if (storage != sym)
-        {
-          if (result_size < 1 || result_size > K78K0_MAX_SCALAR_BYTES || right_size != result_size)
-            return false;
-
-          return storeOperandToSymbol (right, storage, result_size);
-        }
-    }
-
-  OP_SYMBOL (result)->reqv = right;
-  return true;
+  return finishWideAssignment (ic, result, target);
 }
 
 static bool
@@ -1909,83 +2078,21 @@ genBinaryAccumulatorOp (const iCode *ic, const char *low_mnemonic, const char *h
   operand *result = IC_RESULT (ic);
   operand *left = IC_LEFT (ic);
   operand *right = IC_RIGHT (ic);
-  operand *target;
-  const bool carry_add = !strcmp (low_mnemonic, "add") && !strcmp (high_mnemonic, "addc");
-  const bool carry_sub = !strcmp (low_mnemonic, "sub") && !strcmp (high_mnemonic, "subc");
+  const bool carry_add = !strcmp (high_mnemonic, "addc");
+  const bool carry_sub = !strcmp (high_mnemonic, "subc");
+  const bool uses_carry = carry_add || carry_sub;
   int size;
 
   if (!IS_ITEMP (result) || !left || !right)
     return false;
 
   size = k78k0_operandSize (result);
-  if (size < 1 || size > K78K0_MAX_SCALAR_BYTES)
+  if (!isScalarSize (size))
     return false;
 
   if (size > 2)
-    {
-      int right_size = k78k0_operandSize (right);
-
-      target = wideAssignmentTarget (ic, result, size);
-      if (!target)
-        return true;
-      if (k78k0_operandSize (left) != size || right_size > size)
-        return false;
-
-      if (right_size != size && !IS_OP_LITERAL (right) && !SPEC_USIGN (getSpec (operandType (right))))
-        return false;
-
-      if (operandNeedsStackHL (left, size) || operandNeedsStackHL (right, size) || (target && operandNeedsStackHL (target, size)))
-        setHLToSP ();
-
-      for (int offset = 0; offset < size; offset++)
-        {
-          if (carry_add || carry_sub)
-            {
-              if (!loadOperandByteToA (left, offset))
-                return false;
-              emit2 ("mov", "c,a");
-              if (!loadOperandByteToA (right, offset))
-                return false;
-              emit2 ("mov", "b,a");
-              emit2 ("mov", "a,c");
-
-              if (offset)
-                {
-                  emit2 ("pop", "psw");
-                  stack_pushed--;
-                  clearHLState ();
-                }
-
-              emit2 (offset ? high_mnemonic : low_mnemonic, "a,b");
-            }
-          else
-            {
-              if (!loadOperandByteToA (left, offset))
-                return false;
-
-              if (operandByteOnStack (right, offset))
-                ensureHLToSPPreservingAX ();
-
-              if (!aluOperandByteToA (offset ? high_mnemonic : low_mnemonic, right, offset))
-                return false;
-            }
-
-          if (offset == size - 1)
-            maskUnsignedBitIntTopByteInA (result);
-
-          if ((carry_add || carry_sub) && offset != size - 1)
-            {
-              emit2 ("push", "psw");
-              stack_pushed++;
-              clearHLState ();
-            }
-
-          if (!storeAToOperandByte (target, offset))
-            return false;
-        }
-
-      return finishWideAssignment (ic, result, target);
-    }
+    return genWideBinaryAccumulatorOp (ic, result, left, right, size, low_mnemonic,
+                                       high_mnemonic, uses_carry);
 
   if (operandNeedsStackHL (right, size) && !operandNeedsStackHL (left, size))
     setHLToSP ();
@@ -1996,7 +2103,7 @@ genBinaryAccumulatorOp (const iCode *ic, const char *low_mnemonic, const char *h
   if (operandByteOnStack (right, 0))
     ensureHLToSPPreservingAX ();
 
-  if (size == 1 && IS_OP_LITERAL (right) && operandLitValueUll (right) == 1u && (carry_add || carry_sub))
+  if (size == 1 && IS_OP_LITERAL (right) && operandLitValueUll (right) == 1u && uses_carry)
     emit2 (carry_add ? "inc" : "dec", "a");
   else if (!aluOperandByteToA (low_mnemonic, right, 0))
     return false;
@@ -2025,7 +2132,7 @@ genBinaryAccumulatorOp (const iCode *ic, const char *low_mnemonic, const char *h
   adjustStackPointer (-2, true);
   emit2 ("mov", "a,b");
   emit2 ("mov", "[hl+0x00],a");
-  if (carry_add || carry_sub)
+  if (uses_carry)
     {
       emit2 ("mov", "a,c");
       emit2 ("mov", "[hl+0x01],a");
@@ -2040,7 +2147,7 @@ genBinaryAccumulatorOp (const iCode *ic, const char *low_mnemonic, const char *h
   if (!aluOperandByteToA (carry_add ? "add" : carry_sub ? "sub" : high_mnemonic, right, 1))
     return false;
 
-  if (carry_add || carry_sub)
+  if (uses_carry)
     {
       ensureHLToSPPreservingA ("b");
       emit2 ("add", "a,[hl+0x01]");
@@ -2064,7 +2171,7 @@ genBinaryAccumulatorOp (const iCode *ic, const char *low_mnemonic, const char *h
 static bool
 operandUsesPair (const operand *op, const char *pair)
 {
-  const char *allocated_pair = operandIsAllocated (op) ? symbolRegisterPair (OP_SYMBOL_CONST (op)) : NULL;
+  const char *allocated_pair = IS_SYMOP (op) ? symbolRegisterPair (OP_SYMBOL_CONST (op)) : NULL;
 
   return allocated_pair && !strcmp (allocated_pair, pair);
 }
@@ -2188,22 +2295,24 @@ genUnaryMinus (const iCode *ic)
   operand *result = IC_RESULT (ic);
   operand *left = IC_LEFT (ic);
   operand *target;
+  bool is_float;
   int size;
 
   if (!IS_ITEMP (result) || !left)
     return false;
 
   size = k78k0_operandSize (result);
-  if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || k78k0_operandSize (left) != size)
+  if (!isScalarSize (size) || k78k0_operandSize (left) != size)
     return false;
 
-  if (IS_FLOAT (getSpec (operandType (result))))
+  is_float = IS_FLOAT (getSpec (operandType (result)));
+  if (is_float || size > 2)
     {
       target = wideAssignmentTarget (ic, result, size);
       if (!target)
         return true;
 
-      if (operandNeedsStackHL (left, size) || (target && operandNeedsStackHL (target, size)))
+      if (operandNeedsStackHL (left, size) || operandNeedsStackHL (target, size))
         setHLToSP ();
 
       for (int offset = 0; offset < size; offset++)
@@ -2211,35 +2320,16 @@ genUnaryMinus (const iCode *ic)
           if (!loadOperandByteToA (left, offset))
             return false;
 
-          if (offset == size - 1)
-            emit2 ("xor", "a,#0x80");
-
-          if (!storeAToOperandByte (target, offset))
-            return false;
-        }
-
-      return finishWideAssignment (ic, result, target);
-    }
-
-  if (size > 2)
-    {
-      target = wideAssignmentTarget (ic, result, size);
-      if (!target)
-        return true;
-
-      if (operandNeedsStackHL (left, size) || (target && operandNeedsStackHL (target, size)))
-        setHLToSP ();
-
-      for (int offset = 0; offset < size; offset++)
-        {
-          if (!loadOperandByteToA (left, offset))
-            return false;
-
-          emit2 ("xor", "a,#0xff");
-          if (offset == 0)
-            emit2 ("add", "a,#0x01");
+          if (is_float)
+            {
+              if (offset == size - 1)
+                emit2 ("xor", "a,#0x80");
+            }
           else
-            emit2 ("addc", "a,#0x00");
+            {
+              emit2 ("xor", "a,#0xff");
+              emit2 (offset ? "addc" : "add", offset ? "a,#0x00" : "a,#0x01");
+            }
 
           if (!storeAToOperandByte (target, offset))
             return false;
@@ -2371,16 +2461,9 @@ genMult (const iCode *ic)
   emit2 ("mulu", "x");
 
   if (size == 1)
-    {
-      emit2 ("mov", "a,x");
-      maskUnsignedBitIntTopByteInA (result);
-      setAResult (result);
-    }
-  else
-    {
-      maskUnsignedBitIntTopByteInA (result);
-      setReturnResult (result, size);
-    }
+    emit2 ("mov", "a,x");
+  maskUnsignedBitIntTopByteInA (result);
+  setReturnResult (result, size);
 
   return true;
 }
@@ -2494,16 +2577,27 @@ genCmpEqNe (const iCode *ic, iCode *ifx)
     return false;
 
   size = k78k0_operandSize (left);
-  if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || k78k0_operandSize (right) != size)
+  if (!isScalarSize (size) || k78k0_operandSize (right) != size)
     return false;
 
   prepareComparisonLabels (ifx, true_label, false_label, done_label, sizeof (true_label));
 
-  if (size == 2 && IS_OP_LITERAL (right))
+  if (size <= 2 && IS_OP_LITERAL (right))
     {
-      if (!loadOperandLowWordToAX (left))
-        return false;
-      emit2 ("cmpw", "ax,#0x%04x", (unsigned)(operandLitValueBits (right) & 0xffffu));
+      const unsigned literal = (unsigned)operandLitValueBits (right);
+
+      if (size == 1)
+        {
+          if (!loadOperandByteToA (left, 0))
+            return false;
+          emit2 ("cmp", "a,#0x%02x", literal & 0xffu);
+        }
+      else
+        {
+          if (!loadOperandLowWordToAX (left))
+            return false;
+          emit2 ("cmpw", "ax,#0x%04x", literal & 0xffffu);
+        }
       emitCondBranch ("bnz", is_ne ? true_label : false_label);
       emit2 ("br", "!%s", is_ne ? false_label : true_label);
       finishComparison (result, ifx, true_label, false_label, done_label);
@@ -2547,23 +2641,27 @@ genCmpLtGt (const iCode *ic, iCode *ifx)
     return false;
 
   size = k78k0_operandSize (left);
-  if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || k78k0_operandSize (right) != size)
+  if (!isScalarSize (size) || k78k0_operandSize (right) != size)
     return false;
 
   prepareComparisonLabels (ifx, true_label, false_label, done_label, sizeof (true_label));
 
-  if (size == 2 && IS_OP_LITERAL (right))
+  if (size <= 2 && IS_OP_LITERAL (right))
     {
-      unsigned literal = (unsigned)(operandLitValueBits (right) & 0xffffu);
+      const unsigned mask = size == 1 ? 0xffu : 0xffffu;
+      unsigned literal = (unsigned)operandLitValueBits (right) & mask;
 
-      if (!loadOperandLowWordToAX (left))
+      if (size == 1 ? !loadOperandByteToA (left, 0) : !loadOperandLowWordToAX (left))
         return false;
       if (is_signed)
         {
           emit2 ("xor", "a,#0x80");
-          literal ^= 0x8000u;
+          literal ^= size == 1 ? 0x80u : 0x8000u;
         }
-      emit2 ("cmpw", "ax,#0x%04x", literal);
+      if (size == 1)
+        emit2 ("cmp", "a,#0x%02x", literal);
+      else
+        emit2 ("cmpw", "ax,#0x%04x", literal);
       if (is_gt)
         {
           emitCondBranch ("bc", false_label);
@@ -2659,7 +2757,7 @@ finishCall (const iCode *ic, sym_link *ftype, operand *result, const bool hidden
       if (target)
         {
           const symbol *storage = operandStorageSymbol (target);
-          const bool stored = operandIsAllocated (target) ?
+          const bool stored = operandHasAllocatedByte (target) ?
             storeReturnValueToAllocatedOperand (target, result_size) :
             storeReturnRegistersToSymbol (storage, result_size);
 
@@ -2690,7 +2788,6 @@ genCall (const iCode *ic)
 {
   operand *left = IC_LEFT (ic);
   operand *result = IC_RESULT (ic);
-  sym_link *left_type;
   sym_link *ftype;
   bool bigreturn;
   int first_regarg_size = 0;
@@ -2698,9 +2795,8 @@ genCall (const iCode *ic)
   if (ic->op != CALL || !left)
     return false;
 
-  left_type = operandType (left);
-  bigreturn = typeReturnsViaHiddenPointer (left_type);
-  ftype = IS_FUNCPTR (left_type) ? left_type->next : left_type;
+  ftype = functionType (operandType (left));
+  bigreturn = typeReturnsViaHiddenPointer (ftype);
 
   clearRegisterState ();
 
@@ -2738,7 +2834,6 @@ genPcall (const iCode *ic)
 {
   operand *left = IC_LEFT (ic);
   operand *result = IC_RESULT (ic);
-  sym_link *left_type;
   sym_link *ftype;
   char return_label[32];
   bool bigreturn;
@@ -2747,9 +2842,8 @@ genPcall (const iCode *ic)
   if (ic->op != PCALL || !left || k78k0_operandSize (left) != 2)
     return false;
 
-  left_type = operandType (left);
-  bigreturn = typeReturnsViaHiddenPointer (left_type);
-  ftype = IS_FUNCPTR (left_type) ? left_type->next : left_type;
+  ftype = functionType (operandType (left));
+  bigreturn = typeReturnsViaHiddenPointer (ftype);
 
   first_regarg_size = functionFirstRegArgSize (ftype);
   if (first_regarg_size)
@@ -2805,6 +2899,47 @@ genIfx (const iCode *ic)
 }
 
 static bool
+loadOperandToReturnRegisters (const operand *op, const int size)
+{
+  const symbol *sym = OP_SYMBOL_CONST (op);
+
+  if (symbolUsesReturnLayout (sym, size))
+    return true;
+
+  const char *low_pair = symbolRegisterPair (sym);
+  const bool preserve_ax = low_pair && !strcmp (low_pair, "ax");
+
+  if (preserve_ax)
+    {
+      emit2 ("push", "ax");
+      stack_pushed += 2;
+    }
+
+  if (size >= 3)
+    {
+      if (!loadOperandByteToA (op, 2))
+        return false;
+      emit2 ("mov", "c,a");
+      if (size == 4)
+        {
+          if (!loadOperandByteToA (op, 3))
+            return false;
+          emit2 ("mov", "b,a");
+        }
+    }
+
+  if (preserve_ax)
+    {
+      emit2 ("pop", "ax");
+      stack_pushed -= 2;
+      clearHLState ();
+      return true;
+    }
+
+  return loadOperandLowWordToAX (op);
+}
+
+static bool
 genOperandReturnValue (const operand *op)
 {
   int size;
@@ -2822,14 +2957,14 @@ genOperandReturnValue (const operand *op)
     {
       const symbol *sym = operandStorageSymbol (op);
 
-      if (operandIsAllocated (op))
+      if (operandHasAllocatedByte (op))
         {
           if (size == 1)
             return loadOperandByteToA (op, 0);
           if (size == 2)
             return loadOperandLowWordToAX (op);
           if (size <= K78K0_REGISTER_RETURN_BYTES)
-            return storeReturnValueToAllocatedOperand (op, size);
+            return loadOperandToReturnRegisters (op, size);
         }
 
       if (operandInReturnValue (op, size))
@@ -3052,7 +3187,7 @@ genPointerGetBitField (const operand *result, const operand *ptr, long pointer_o
   const bool keep_pointer_in_hl = !operandNeedsStackHL (result, result_size);
 
   if (bit_start < 0 || bit_start > 7 || bit_length < 1 || bit_length > K78K0_MAX_SCALAR_BYTES * 8 ||
-      result_size < 1 || result_size > K78K0_MAX_SCALAR_BYTES ||
+      !isScalarSize (result_size) ||
       !savePointerToDEWithOffset (ptr, &pointer_offset, (unsigned)storage_size))
     return false;
 
@@ -3126,7 +3261,7 @@ genPointerGet (const iCode *ic)
     return false;
 
   size = k78k0_operandSize (result);
-  if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || !getPointerOffset (ic, &offset))
+  if (!isScalarSize (size) || !getPointerOffset (ic, &offset))
     return false;
 
   bit_field_type = getSpec (operandType (result));
@@ -3153,23 +3288,18 @@ genPointerGet (const iCode *ic)
       return true;
     }
 
-  if (size <= K78K0_MAX_SCALAR_BYTES)
+  target = wideAssignmentTarget (ic, result, size);
+  if (!target)
+    return true;
+  for (int byte = 0; byte < size; byte++)
     {
-      target = wideAssignmentTarget (ic, result, size);
-      if (!target)
-        return true;
-      for (int byte = 0; byte < size; byte++)
-        {
-          emit2 ("mov", "a,[de]");
-          if (!storeAToOperandByte (target, byte))
-            return false;
-          if (byte + 1 < size)
-            emit2 ("incw", "de");
-        }
-      return finishWideAssignment (ic, result, target);
+      emit2 ("mov", "a,[de]");
+      if (!storeAToOperandByte (target, byte))
+        return false;
+      if (byte + 1 < size)
+        emit2 ("incw", "de");
     }
-
-  return false;
+  return finishWideAssignment (ic, result, target);
 }
 
 static bool
@@ -3181,7 +3311,7 @@ genPointerSetBitField (const operand *ptr, const operand *value, sym_link *type)
   const int storage_size = (bit_start + bit_length + 7) / 8;
 
   if (bit_start < 0 || bit_start > 7 || bit_length < 1 || bit_length > K78K0_MAX_SCALAR_BYTES * 8 ||
-      value_size < 1 || value_size > K78K0_MAX_SCALAR_BYTES || storage_size < 1 || storage_size > 256 ||
+      !isScalarSize (value_size) || storage_size < 1 || storage_size > 256 ||
       !savePointerToDE (ptr, 0))
     return false;
   for (int byte = 0; byte < storage_size; byte++)
@@ -3239,17 +3369,11 @@ genPointerSetBitField (const operand *ptr, const operand *value, sym_link *type)
 static bool
 genPointerSet (const iCode *ic)
 {
-  operand *ptr;
+  operand *ptr = ic->op == SET_VALUE_AT_ADDRESS ? IC_LEFT (ic) :
+                 POINTER_SET (ic) ? IC_RESULT (ic) : NULL;
   operand *value = IC_RIGHT (ic);
   sym_link *bit_field_type;
   int size;
-
-  if (ic->op == SET_VALUE_AT_ADDRESS)
-    ptr = IC_LEFT (ic);
-  else if (POINTER_SET (ic))
-    ptr = IC_RESULT (ic);
-  else
-    return false;
 
   if (!ptr || !value)
     return false;
@@ -3259,7 +3383,7 @@ genPointerSet (const iCode *ic)
     return genPointerSetBitField (ptr, value, bit_field_type);
 
   size = k78k0_operandSize (value);
-  if (size < 1 || size > K78K0_MAX_SCALAR_BYTES)
+  if (!isScalarSize (size))
     return false;
 
   if (!savePointerToDE (ptr, 0))
@@ -3287,7 +3411,7 @@ genDivMod (const iCode *ic)
   const bool is_mod = ic->op == '%';
   int result_size;
 
-  if (!IS_ITEMP (result) || !left || !right || !isUnsignedByteDivisor (right))
+  if (!IS_ITEMP (result) || !left || !right || !isUnsignedByteDivisor (ic))
     return false;
 
   result_size = getSize (operandType (result));
@@ -3512,13 +3636,13 @@ shiftTargetLeftOne (const operand *target, const int size)
 }
 
 static bool
-shiftTargetLeftBytes (const operand *target, const int size, const int count)
+shiftOperandLeftBytes (const operand *source, const operand *target, const int size, const int count)
 {
   int offset;
 
   for (offset = size - 1; offset >= count; offset--)
     {
-      if (!loadOperandByteToA (target, offset - count))
+      if (!loadOperandByteToA (source, offset - count))
         return false;
       if (!storeAToOperandByte (target, offset))
         return false;
@@ -3563,13 +3687,14 @@ shiftTargetRightOne (const operand *target, const int size, const bool is_signed
 }
 
 static bool
-shiftTargetRightBytes (const operand *target, const int size, const int count, const bool is_signed_right)
+shiftOperandRightBytes (const operand *source, const operand *target, const int size,
+                        const int count, const bool is_signed_right)
 {
   int offset;
 
   if (is_signed_right)
     {
-      if (!loadOperandByteToA (target, size - 1))
+      if (!loadOperandByteToA (source, size - 1))
         return false;
       emitSignMaskForA ();
       emit2 ("mov", "b,a");
@@ -3577,7 +3702,7 @@ shiftTargetRightBytes (const operand *target, const int size, const int count, c
 
   for (offset = 0; offset < size - count; offset++)
     {
-      if (!loadOperandByteToA (target, offset + count))
+      if (!loadOperandByteToA (source, offset + count))
         return false;
       if (!storeAToOperandByte (target, offset))
         return false;
@@ -3595,6 +3720,21 @@ shiftTargetRightBytes (const operand *target, const int size, const int count, c
 }
 
 static bool
+shiftOperandBytes (const operand *source, const operand *target, const int size, const int count,
+                   const bool is_right, const bool is_signed_right)
+{
+  return is_right ? shiftOperandRightBytes (source, target, size, count, is_signed_right) :
+                    shiftOperandLeftBytes (source, target, size, count);
+}
+
+static bool
+shiftTargetOne (const operand *target, const int size, const bool is_right, const bool is_signed_right)
+{
+  return is_right ? shiftTargetRightOne (target, size, is_signed_right) :
+                    shiftTargetLeftOne (target, size);
+}
+
+static bool
 shiftTargetByBits (const operand *target, const int size, const bool is_right, const bool is_signed_right, const unsigned count)
 {
   char loop_label[32];
@@ -3608,12 +3748,7 @@ shiftTargetByBits (const operand *target, const int size, const bool is_right, c
       emitLocalLabel (loop_label);
     }
 
-  if (is_right)
-    {
-      if (!shiftTargetRightOne (target, size, is_signed_right))
-        return false;
-    }
-  else if (!shiftTargetLeftOne (target, size))
+  if (!shiftTargetOne (target, size, is_right, is_signed_right))
     return false;
 
   if (count > 1)
@@ -3643,7 +3778,7 @@ genWideLiteralShift (const iCode *ic, const bool is_right, const bool is_signed_
   unsigned byte_count;
   int size = getSize (operandType (result));
 
-  if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || getSize (operandType (left)) != size)
+  if (!isScalarSize (size) || getSize (operandType (left)) != size)
     return false;
 
   target = wideAssignmentTarget (ic, result, size);
@@ -3672,12 +3807,12 @@ genWideLiteralShift (const iCode *ic, const bool is_right, const bool is_signed_
   byte_count = (unsigned)(count / 8u);
   count %= 8u;
 
-  if (!copyOperandToTarget (left, target, size))
-    return false;
-
-  if (byte_count &&
-      !(is_right ? shiftTargetRightBytes (target, size, byte_count, is_signed_right) :
-                    shiftTargetLeftBytes (target, size, byte_count)))
+  if (byte_count)
+    {
+      if (!shiftOperandBytes (left, target, size, byte_count, is_right, is_signed_right))
+        return false;
+    }
+  else if (!copyOperandToTarget (left, target, size))
     return false;
 
   if (count && !shiftTargetByBits (target, size, is_right, is_signed_right, (unsigned)count))
@@ -3697,11 +3832,13 @@ genWideVariableShift (const iCode *ic, const bool is_right, const bool is_signed
   operand *right = IC_RIGHT (ic);
   operand *target;
   const unsigned top_byte_mask = unsignedBitIntTopByteMask (result);
+  char byte_loop_label[32];
+  char residual_label[32];
   char loop_label[32];
   char done_label[32];
   int size = getSize (operandType (result));
 
-  if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || getSize (operandType (left)) != size || getSize (operandType (right)) < 1)
+  if (!isScalarSize (size) || getSize (operandType (left)) != size || getSize (operandType (right)) < 1)
     return false;
 
   target = wideAssignmentTarget (ic, result, size);
@@ -3710,26 +3847,36 @@ genWideVariableShift (const iCode *ic, const bool is_right, const bool is_signed
 
   if (!loadOperandByteToA (right, 0))
     return false;
-  emit2 ("mov", "b,a");
+  emit2 ("mov", "d,a");
 
   if (!copyOperandToTarget (left, target, size))
     return false;
 
+  makeLocalLabel (byte_loop_label, sizeof (byte_loop_label));
+  makeLocalLabel (residual_label, sizeof (residual_label));
   makeLocalLabel (loop_label, sizeof (loop_label));
   makeLocalLabel (done_label, sizeof (done_label));
 
-  emit2 ("mov", "a,b");
+  emitLocalLabel (byte_loop_label);
+  emit2 ("mov", "a,d");
+  emit2 ("cmp", "a,#0x08");
+  emitCondBranch ("bc", residual_label);
+  emit2 ("sub", "a,#0x08");
+  emit2 ("mov", "d,a");
+
+  if (!shiftOperandBytes (target, target, size, 1, is_right, is_signed_right))
+    return false;
+  emit2 ("br", "!%s", byte_loop_label);
+
+  emitLocalLabel (residual_label);
+  emit2 ("mov", "a,d");
+  emit2 ("mov", "b,a");
   emit2 ("cmp", "a,#0x00");
   emitCondBranch ("bz", done_label);
 
   emitLocalLabel (loop_label);
 
-  if (is_right)
-    {
-      if (!shiftTargetRightOne (target, size, is_signed_right))
-        return false;
-    }
-  else if (!shiftTargetLeftOne (target, size))
+  if (!shiftTargetOne (target, size, is_right, is_signed_right))
     return false;
 
   emit2 ("dbnz", "b,%s", loop_label);
@@ -3741,74 +3888,47 @@ genWideVariableShift (const iCode *ic, const bool is_right, const bool is_signed
 }
 
 static bool
-genShift (const iCode *ic)
+genScalarVariableShift (const operand *result, const operand *left, const operand *right,
+                        const int size, const bool is_right, const bool is_signed_right)
 {
-  operand *result = IC_RESULT (ic);
-  operand *left = IC_LEFT (ic);
-  operand *right = IC_RIGHT (ic);
-  const bool is_right = ic->op == RIGHT_OP;
-  bool is_signed_right;
-  unsigned long long count;
-  int size;
-
-  if (!IS_ITEMP (result) || !left || !right)
+  if (getSize (operandType (right)) < 1)
     return false;
 
-  is_signed_right = is_right && !SPEC_USIGN (getSpec (operandType (left)));
+  if (operandNeedsStackHL (left, size) || operandNeedsStackHL (right, 1))
+    setHLToSP ();
 
-  size = getSize (operandType (result));
-  if (size < 1 || size > K78K0_MAX_SCALAR_BYTES || getSize (operandType (left)) != size)
-    return false;
-
-  if (!IS_OP_LITERAL (right))
+  if (size == 1)
     {
-      if (size > 2)
-        return genWideVariableShift (ic, is_right, is_signed_right);
-
-      if (getSize (operandType (right)) < 1)
+      if (!loadOperandByteToA (left, 0))
         return false;
-
-      if (operandNeedsStackHL (left, size) || operandNeedsStackHL (right, 1))
-        setHLToSP ();
-
-      if (size == 1)
-        {
-          if (!loadOperandByteToA (left, 0))
-            return false;
-          emit2 ("mov", "b,a");
-        }
-      else
-        {
-          if (!genOperandReturnValue (left))
-            return false;
-          emit2 ("movw", "de,ax");
-        }
-
-      if (!loadOperandByteToA (right, 0))
+      emit2 ("mov", "b,a");
+    }
+  else
+    {
+      if (!genOperandReturnValue (left))
         return false;
-      emit2 ("mov", "c,a");
-
-      if (size == 1)
-        emit2 ("mov", "a,b");
-      else
-        emit2 ("movw", "ax,de");
-
-      emitVariableShiftLoop (size, is_right, is_signed_right);
-
-      maskUnsignedBitIntTopByteInA (result);
-
-      if (size == 1)
-        setAResult (result);
-      else
-        setReturnResult (result, size);
-
-      return true;
+      emit2 ("movw", "de,ax");
     }
 
-  count = operandLitValueUll (right);
-  if (size > 2)
-    return genWideLiteralShift (ic, is_right, is_signed_right, count);
+  if (!loadOperandByteToA (right, 0))
+    return false;
+  emit2 ("mov", "c,a");
 
+  if (size == 1)
+    emit2 ("mov", "a,b");
+  else
+    emit2 ("movw", "ax,de");
+
+  emitVariableShiftLoop (size, is_right, is_signed_right);
+  maskUnsignedBitIntTopByteInA (result);
+  setReturnResult (result, size);
+  return true;
+}
+
+static bool
+genScalarLiteralShift (const operand *result, const operand *left, const int size,
+                       const bool is_right, const bool is_signed_right, unsigned long long count)
+{
   if (count >= (unsigned)(size * 8))
     {
       clearReturnValueState ();
@@ -3837,20 +3957,119 @@ genShift (const iCode *ic)
         emitScalarShiftOne (size, is_right, is_signed_right);
 
       maskUnsignedBitIntTopByteInA (result);
-
-      setAResult (result);
+      setReturnResult (result, size);
       return true;
     }
 
   if (!genOperandReturnValue (left))
     return false;
 
+  if (count >= 8)
+    {
+      if (is_right)
+        {
+          emit2 ("mov", "x,a");
+          if (is_signed_right)
+            emitSignMaskForA ();
+          else
+            emit2 ("mov", "a,#0x00");
+        }
+      else
+        {
+          emit2 ("mov", "a,x");
+          emit2 ("mov", "c,a");
+          emit2 ("mov", "a,#0x00");
+          emit2 ("mov", "x,a");
+          emit2 ("mov", "a,c");
+        }
+      count -= 8;
+    }
+
   while (count--)
     emitScalarShiftOne (size, is_right, is_signed_right);
 
   maskUnsignedBitIntTopByteInA (result);
-
   setReturnResult (result, size);
+  return true;
+}
+
+static bool
+genShift (const iCode *ic)
+{
+  operand *result = IC_RESULT (ic);
+  operand *left = IC_LEFT (ic);
+  operand *right = IC_RIGHT (ic);
+  const bool is_right = ic->op == RIGHT_OP;
+  bool is_signed_right;
+  unsigned long long count;
+  int size;
+
+  if (!IS_ITEMP (result) || !left || !right)
+    return false;
+
+  is_signed_right = is_right && !SPEC_USIGN (getSpec (operandType (left)));
+
+  size = getSize (operandType (result));
+  if (!isScalarSize (size) || getSize (operandType (left)) != size)
+    return false;
+
+  if (!IS_OP_LITERAL (right))
+    return size > 2 ? genWideVariableShift (ic, is_right, is_signed_right) :
+                      genScalarVariableShift (result, left, right, size, is_right, is_signed_right);
+
+  count = operandLitValueUll (right);
+  if (size > 2)
+    return genWideLiteralShift (ic, is_right, is_signed_right, count);
+  return genScalarLiteralShift (result, left, size, is_right, is_signed_right, count);
+}
+
+static void
+emitByteRotate (const char *mnemonic, unsigned count)
+{
+  while (count--)
+    emit2 (mnemonic, "a,1");
+}
+
+static bool
+genRot (const iCode *ic)
+{
+  operand *result = IC_RESULT (ic);
+  operand *left = IC_LEFT (ic);
+  operand *right = IC_RIGHT (ic);
+  unsigned count;
+
+  if (!IS_ITEMP (result) || !left || !IS_OP_LITERAL (right) ||
+      bitsForType (operandType (left)) != 8 || k78k0_operandSize (result) != 1)
+    return false;
+
+  count = (unsigned)(operandLitValueUll (right) % 8u);
+  if (!loadOperandByteToA (left, 0))
+    return false;
+
+  if (count <= 4)
+    emitByteRotate ("rol", count);
+  else
+    emitByteRotate ("ror", 8 - count);
+
+  setAResult (result);
+  return true;
+}
+
+static bool
+getLiteralByteOffset (const iCode *ic, const int result_size, int *byte_offset)
+{
+  operand *right = IC_RIGHT (ic);
+  unsigned long long bit_offset;
+
+  if (!IS_ITEMP (IC_RESULT (ic)) || !IC_LEFT (ic) || !right || !IS_OP_LITERAL (right) ||
+      k78k0_operandSize (IC_RESULT (ic)) != result_size)
+    return false;
+
+  bit_offset = operandLitValueUll (right);
+  if (bit_offset % 8ull)
+    return false;
+
+  *byte_offset = (int)(bit_offset / 8ull);
   return true;
 }
 
@@ -3859,17 +4078,12 @@ genGetByte (const iCode *ic)
 {
   operand *result = IC_RESULT (ic);
   operand *left = IC_LEFT (ic);
-  operand *right = IC_RIGHT (ic);
-  unsigned long long bit_offset;
+  int byte_offset;
 
-  if (!IS_ITEMP (result) || !left || !IS_OP_LITERAL (right) || k78k0_operandSize (result) != 1)
+  if (!getLiteralByteOffset (ic, 1, &byte_offset))
     return false;
 
-  bit_offset = operandLitValueUll (right);
-  if (bit_offset % 8ull)
-    return false;
-
-  if (!loadOperandByteToA (left, (int)(bit_offset / 8ull)))
+  if (!loadOperandByteToA (left, byte_offset))
     return false;
 
   setAResult (result);
@@ -3881,27 +4095,19 @@ genGetWord (const iCode *ic)
 {
   operand *result = IC_RESULT (ic);
   operand *left = IC_LEFT (ic);
-  operand *right = IC_RIGHT (ic);
-  unsigned long long bit_offset;
   int byte_offset;
 
-  if (!IS_ITEMP (result) || !left || !IS_OP_LITERAL (right) || k78k0_operandSize (result) != 2)
+  if (!getLiteralByteOffset (ic, 2, &byte_offset))
     return false;
-
-  bit_offset = operandLitValueUll (right);
-  if (bit_offset % 8ull)
-    return false;
-
-  byte_offset = (int)(bit_offset / 8ull);
-
-  if (!loadOperandByteToA (left, byte_offset))
-    return false;
-  emit2 ("mov", "c,a");
 
   if (!loadOperandByteToA (left, byte_offset + 1))
     return false;
+  emit2 ("mov", "d,a");
+
+  if (!loadOperandByteToA (left, byte_offset))
+    return false;
   emit2 ("mov", "x,a");
-  emit2 ("mov", "a,c");
+  emit2 ("mov", "a,d");
 
   setReturnResult (result, 2);
   return true;
@@ -3925,8 +4131,13 @@ genGetABit (const iCode *ic)
   if (!loadOperandByteToA (left, (int)(bit_offset / 8ull)))
     return false;
 
-  emit2 ("and", "a,#0x%02x", 1u << (unsigned)(bit_offset % 8ull));
-  materializeZeroTest (result, false);
+  unsigned shift = (unsigned)(bit_offset % 8ull);
+  if (shift <= 4)
+    emitByteRotate ("ror", shift);
+  else
+    emitByteRotate ("rol", 8 - shift);
+  emit2 ("and", "a,#0x01");
+  setAResult (result);
   return true;
 }
 
@@ -3940,7 +4151,7 @@ genDummyReadVolatile (const iCode *ic)
     return false;
 
   size = k78k0_operandSize (right);
-  if (size < 1 || size > K78K0_MAX_SCALAR_BYTES)
+  if (!isScalarSize (size))
     return false;
 
   for (int offset = 0; offset < size; offset++)
@@ -3964,7 +4175,7 @@ genJumpTable (const iCode *ic)
     return false;
 
   size = getSize (operandType (cond));
-  if (size < 1 || size > K78K0_MAX_SCALAR_BYTES)
+  if (!isScalarSize (size))
     return false;
 
   if (size == 1)
@@ -3983,9 +4194,7 @@ genJumpTable (const iCode *ic)
   emit2 ("addw", "ax,#%s", table_label);
   emit2 ("movw", "hl,ax");
   clearHLState ();
-  emit2 ("mov", "a,[hl+0x00]");
-  emit2 ("mov", "x,a");
-  emit2 ("mov", "a,[hl+0x01]");
+  loadWordAtHLToAX ();
   emit2 ("br", "ax");
 
   emitLocalLabel (table_label);
@@ -4009,7 +4218,7 @@ genIpush (const iCode *ic)
     return false;
 
   size = getSize (operandType (left));
-  if (size < 1 || size > K78K0_MAX_SCALAR_BYTES)
+  if (!isScalarSize (size))
     return false;
 
   if (size == 1)
@@ -4117,7 +4326,7 @@ genReceive (const iCode *ic)
   if (size < 1 || !IS_SYMOP (result))
     return false;
 
-  return operandIsAllocated (result) ? storeReturnValueToAllocatedOperand (result, size) :
+  return operandHasAllocatedByte (result) ? storeReturnValueToAllocatedOperand (result, size) :
                                        storeReturnRegistersToSymbol (operandStorageSymbol (result), size);
 }
 
@@ -4141,9 +4350,7 @@ copyReturnToHiddenPointer (const operand *left)
       emit2 ("movw", "de,ax");
 
       setHLToStackOffset (pointer_offset);
-      emit2 ("mov", "a,[hl+0x00]");
-      emit2 ("mov", "x,a");
-      emit2 ("mov", "a,[hl+0x01]");
+      loadWordAtHLToAX ();
       emit2 ("movw", "hl,ax");
 
       emit2 ("mov", "a,#0x%02x", (unsigned)(size & 0xff));
@@ -4161,9 +4368,7 @@ copyReturnToHiddenPointer (const operand *left)
     }
 
   setHLToStackOffset (pointer_offset);
-  emit2 ("mov", "a,[hl+0x00]");
-  emit2 ("mov", "x,a");
-  emit2 ("mov", "a,[hl+0x01]");
+  loadWordAtHLToAX ();
   emit2 ("movw", "de,ax");
 
   for (int offset = 0; offset < size; offset++)
@@ -4308,6 +4513,10 @@ gen78K0iCode (iCode *ic)
     case LEFT_OP:
     case RIGHT_OP:
       wassertl (genShift (ic), "78K0 shift is not implemented yet.");
+      break;
+
+    case ROT:
+      wassertl (genRot (ic), "78K0 rotate is not implemented yet.");
       break;
 
     case GETBYTE:

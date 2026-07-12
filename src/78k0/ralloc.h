@@ -42,6 +42,7 @@ typedef struct reg_info
 } reg_info;
 
 extern reg_info k78k0_regs[];
+extern bitVect *k78k0_partial_allocations;
 
 void k78k0SpillThis (symbol *, bool);
 iCode *k78k0_ralloc2_cc (ebbIndex *);

@@ -37,8 +37,19 @@ legal_layout (const std::vector<reg_t> &layout)
 {
   if (std::all_of (layout.begin (), layout.end (), [](reg_t reg) { return reg < 0; }))
     return true;
-  if (std::any_of (layout.begin (), layout.end (), [](reg_t reg) { return reg < 0; }))
-    return false;
+
+  const bool partly_spilled =
+    std::any_of (layout.begin (), layout.end (), [](reg_t reg) { return reg < 0; });
+  if (partly_spilled)
+    {
+      if (layout.size () != 4)
+        return false;
+      for (unsigned byte = 0; byte < layout.size (); byte++)
+        if (layout[byte] >= 0 && layout[byte] != (reg_t)byte)
+          return false;
+      return (layout[0] < 0) == (layout[1] < 0) &&
+             (layout[2] < 0) == (layout[3] < 0);
+    }
 
   switch (layout.size ())
     {
@@ -112,6 +123,7 @@ instruction_clobbers (const iCode *ic)
       return result_size == 1 ? MASK_AX | MASK_C : MASK_ALL;
     case LEFT_OP:
     case RIGHT_OP:
+    case ROT:
       return result_size == 1 ? MASK_AX | MASK_BC : MASK_ALL;
     case UNARYMINUS:
     case '!':
@@ -246,8 +258,10 @@ instruction_cost (const assignment &a, unsigned short i, const G_t &G, const I_t
     return std::numeric_limits<float>::infinity ();
 
   float cost = 0.0f;
+  const float frequency = std::max (1.0f, G[i].ic->count);
   for (const auto &operand : G[i].operands)
-    cost += a.global[operand.second] < 0 ? 2.0f : 0.0f;
+    if (a.global[operand.second] < 0)
+      cost += frequency * (I[operand.second].byte < 2 ? 2.0f : 1.0f);
   return cost;
 }
 
@@ -268,7 +282,7 @@ assignment_hopeless (const assignment &a, unsigned short, const G_t &, const I_t
         has_spill |= a.global[v] < 0;
       }
 
-  if (has_register && has_spill)
+  if (has_register && has_spill && partial.size () != 4)
     return true;
   if (!has_register || partial.size () == 1)
     return false;
@@ -283,6 +297,13 @@ assignment_hopeless (const assignment &a, unsigned short, const G_t &, const I_t
       for (unsigned byte = 0; byte < partial.size (); byte++)
         if (partial[byte] >= 0 && partial[byte] != (reg_t)byte)
           return true;
+
+      if (partial.size () == 4)
+        for (unsigned byte = 0; byte < 4; byte += 2)
+          if (partial[byte] != -2 && partial[byte + 1] != -2 &&
+              (partial[byte] < 0) != (partial[byte + 1] < 0))
+            return true;
+
       return false;
     }
 
@@ -372,12 +393,21 @@ allocate (T_t &T, G_t &G, const I_t &I)
   for (unsigned v = 0; v < boost::num_vertices (I);)
     {
       symbol *sym = static_cast<symbol *> (hTabItemWithKey (liveRanges, I[v].v));
+      const int size = I[v].size;
       bool spilled = false;
+      bool allocated = false;
 
-      for (int byte = 0; byte < I[v].size; byte++, v++)
-        spilled |= winner.global[v] < 0;
+      for (int byte = 0; byte < size; byte++, v++)
+        {
+          spilled |= winner.global[v] < 0;
+          allocated |= winner.global[v] >= 0;
+        }
       if (spilled)
-        k78k0SpillThis (sym, false);
+        {
+          k78k0SpillThis (sym, false);
+          if (allocated && size == 4)
+            k78k0_partial_allocations = bitVectSetBit (k78k0_partial_allocations, sym->key);
+        }
     }
 
   for (unsigned i = 0; i < boost::num_vertices (G); i++)

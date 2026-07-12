@@ -16,10 +16,9 @@ include $(srcdir)/../incl.mk
 
 K78K0_FLOAT = $(COMMON_FLOAT)
 K78K0_LONGLONG = $(COMMON_LONGLONG)
-K78K0_SDCC = $(filter-out _memcmp.c _memset.c,$(COMMON_SDCC)) \
+K78K0_SDCC = $(filter-out _memcmp.c _memset.c _strncmp.c,$(COMMON_SDCC)) \
   __itoa.c \
   __ltoa.c \
-  _strcmp.c \
   _strcpy.c \
   _memmove.c \
   div.c \
@@ -30,7 +29,7 @@ K78K0_SDCC = $(filter-out _memcmp.c _memset.c,$(COMMON_SDCC)) \
 
 K78K0_OBJECTS = $(patsubst %.c,%.rel,$(K78K0_FLOAT) $(K78K0_LONGLONG) $(K78K0_SDCC))
 
-OBJ = setjmp.rel heap.rel _memcmp.rel _memcpy.rel _memset.rel _strlen.rel _strnlen.rel _mulchar.rel _mulint.rel _mulint2long.rel _mullong.rel _mullonglong.rel _divchar.rel _divuint.rel _divsint.rel _divulong.rel _divslong.rel _divlonglong.rel
+OBJ = setjmp.rel heap.rel _memcmp.rel _memcpy.rel _memset.rel _strlen.rel _strnlen.rel _strcmp.rel _strncmp.rel _mulchar.rel _mulint.rel _mulint2long.rel _mullong.rel _mullonglong.rel _divchar.rel _divuint.rel _divsint.rel _divulong.rel _divslong.rel _divlonglong.rel
 LIB = 78k0.lib
 CC = $(SCC)
 AS = $(SAS)

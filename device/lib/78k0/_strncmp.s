@@ -43,6 +43,13 @@ _strncmp:
 	incw	de
 	mov	a,[de]
 	movw	bc,ax
+	or	a,c
+	bz	00002$
+	mov	a,c
+	cmp	a,#0x00
+	bz	00005$
+	inc	b
+00005$:
 	movw	ax,sp
 	addw	ax,#0x0004
 	movw	de,ax
@@ -53,24 +60,26 @@ _strncmp:
 	movw	de,ax
 
 00001$:
-	mov	a,c
-	or	a,b
-	bz	00002$
-	decw	bc
 	mov	a,[hl]
 	mov	x,a
 	mov	a,[de]
 	cmp	a,x
 	bnz	00003$
 	cmp	a,#0x00
-	bz	00002$
+	bz	00004$
 	incw	hl
 	incw	de
-	br	00001$
+	dbnz	c,00001$
+	dbnz	b,00001$
 
 00002$:
-	movw	ax,#0x0000
-	br	00004$
+	pop	de
+	pop	hl
+	pop	ax
+	pop	ax
+	push	hl
+	movw	ax,bc
+	ret
 
 00003$:
 	xch	a,x
@@ -81,10 +90,4 @@ _strncmp:
 
 00004$:
 	movw	bc,ax
-	pop	de
-	pop	hl
-	pop	ax
-	pop	ax
-	push	hl
-	movw	ax,bc
-	ret
+	br	00002$

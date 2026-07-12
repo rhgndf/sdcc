@@ -47,14 +47,10 @@ _strcmp:
 	cmp	a,x
 	bnz	00003$
 	cmp	a,#0x00
-	bz	00002$
+	bz	00004$
 	incw	hl
 	incw	de
 	br	00001$
-
-00002$:
-	movw	ax,#0x0000
-	br	00004$
 
 00003$:
 	xch	a,x

@@ -42,21 +42,23 @@ _memset:
 	incw	de
 	mov	a,[de]
 	movw	bc,ax
+	or	a,c
+	bz	00002$
+	mov	a,c
+	cmp	a,#0x00
+	bz	00003$
+	inc	b
+00003$:
 	movw	ax,sp
 	addw	ax,#0x0006
 	movw	de,ax
 	mov	a,[de]
-	mov	x,a
 
 00001$:
-	mov	a,c
-	or	a,b
-	bz	00002$
-	mov	a,x
 	mov	[hl],a
 	incw	hl
-	decw	bc
-	br	!00001$
+	dbnz	c,00001$
+	dbnz	b,00001$
 
 00002$:
 	pop	ax

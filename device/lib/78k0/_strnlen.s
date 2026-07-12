@@ -36,23 +36,25 @@ _strnlen:
 	pop	bc
 	push	ax
 	push	de
-	movw	ax,bc
-	movw	de,ax
-	movw	bc,#0x0000
+	movw	de,#0x0000
+	mov	a,c
+	or	a,b
+	bz	00002$
+	mov	a,c
+	cmp	a,#0x00
+	bz	00001$
+	inc	b
 
 00001$:
-	mov	a,e
-	or	a,d
-	bz	00002$
 	mov	a,[hl]
 	cmp	a,#0x00
 	bz	00002$
 	incw	hl
-	incw	bc
-	decw	de
-	br	!00001$
+	incw	de
+	dbnz	c,00001$
+	dbnz	b,00001$
 
 00002$:
+	movw	ax,de
 	pop	de
-	movw	ax,bc
 	ret

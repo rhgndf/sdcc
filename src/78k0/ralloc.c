@@ -169,6 +169,58 @@ operandUsesSymbol (const operand *op, const symbol *sym)
 }
 
 static bool
+isComparison (const int op)
+{
+  return op == EQ_OP || op == NE_OP || op == '<' || op == '>';
+}
+
+static bool
+isByteBinaryOperation (const int op)
+{
+  return op == '+' || op == '-' || op == '*' || op == '/' || op == '%' ||
+         op == BITWISEAND || op == '|' || op == '^' || op == LEFT_OP || op == RIGHT_OP ||
+         isComparison (op);
+}
+
+static bool
+isRegisterSafeUse (const iCode *ic, const symbol *sym, const int size)
+{
+  const bool uses_left = operandUsesSymbol (IC_LEFT (ic), sym);
+  const bool uses_right = operandUsesSymbol (IC_RIGHT (ic), sym);
+
+  if ((ic->op == RETURN || ic->op == SEND) && uses_left)
+    return true;
+  if (ic->op == '=' && !POINTER_SET (ic) && uses_right)
+    return true;
+  if (ic->op == IFX)
+    return operandUsesSymbol (IC_COND (ic), sym);
+  if (ic->op == IPUSH)
+    return uses_left;
+
+  if (size == 1)
+    {
+      if (ic->op == CAST)
+        return uses_right;
+      if (ic->op == '!' || ic->op == UNARYMINUS || ic->op == GETBYTE ||
+          ic->op == GETWORD || ic->op == GETABIT)
+        return uses_left;
+      return isByteBinaryOperation (ic->op) && (uses_left || uses_right);
+    }
+
+  if (size != 2)
+    return false;
+
+  if (ic->op == GET_VALUE_AT_ADDRESS || ic->op == SET_VALUE_AT_ADDRESS || ic->op == PCALL)
+    return uses_left;
+  if (ic->op == '+' || ic->op == '-')
+    return (uses_left && IS_OP_LITERAL (IC_RIGHT (ic))) ||
+           (ic->op == '+' && IS_OP_LITERAL (IC_LEFT (ic)) && uses_right);
+  if (isComparison (ic->op))
+    return uses_left && IS_OP_LITERAL (IC_RIGHT (ic));
+  return POINTER_SET (ic) && operandUsesSymbol (IC_RESULT (ic), sym);
+}
+
+static bool
 hasRegisterSafeUses (const symbol *sym, const int size)
 {
   for (int key = 0; key < sym->uses->size; key++)
@@ -176,56 +228,8 @@ hasRegisterSafeUses (const symbol *sym, const int size)
       {
         const iCode *ic = hTabItemWithKey (iCodehTab, key);
 
-        if (!ic)
+        if (!ic || !isRegisterSafeUse (ic, sym, size))
           return false;
-        if ((ic->op == RETURN || ic->op == SEND) &&
-            IC_LEFT (ic) && IS_SYMOP (IC_LEFT (ic)) && OP_SYMBOL_CONST (IC_LEFT (ic)) == sym)
-          continue;
-        if (ic->op == '=' && !POINTER_SET (ic) && IC_RIGHT (ic) &&
-            IS_SYMOP (IC_RIGHT (ic)) && OP_SYMBOL_CONST (IC_RIGHT (ic)) == sym)
-          continue;
-
-        if (size == 1)
-          {
-            if (ic->op == IFX && operandUsesSymbol (IC_COND (ic), sym))
-              continue;
-            if (ic->op == CAST && operandUsesSymbol (IC_RIGHT (ic), sym))
-              continue;
-            if (ic->op == '!' && operandUsesSymbol (IC_LEFT (ic), sym))
-              continue;
-            if ((ic->op == UNARYMINUS || ic->op == GETBYTE || ic->op == GETWORD || ic->op == GETABIT ||
-                 ic->op == IPUSH) && operandUsesSymbol (IC_LEFT (ic), sym))
-              continue;
-            if ((ic->op == '+' || ic->op == '-' || ic->op == '*' || ic->op == '/' || ic->op == '%' ||
-                 ic->op == BITWISEAND || ic->op == '|' || ic->op == '^' || ic->op == LEFT_OP ||
-                 ic->op == RIGHT_OP || ic->op == EQ_OP || ic->op == NE_OP || ic->op == '<' || ic->op == '>') &&
-                (operandUsesSymbol (IC_LEFT (ic), sym) || operandUsesSymbol (IC_RIGHT (ic), sym)))
-              continue;
-          }
-
-        if (size == 2)
-          {
-            if (ic->op == IFX && operandUsesSymbol (IC_COND (ic), sym))
-              continue;
-            if (ic->op == IPUSH && operandUsesSymbol (IC_LEFT (ic), sym))
-              continue;
-            if ((ic->op == '+' || ic->op == '-') &&
-                ((operandUsesSymbol (IC_LEFT (ic), sym) && IS_OP_LITERAL (IC_RIGHT (ic))) ||
-                 (ic->op == '+' && IS_OP_LITERAL (IC_LEFT (ic)) && operandUsesSymbol (IC_RIGHT (ic), sym))))
-              continue;
-            if ((ic->op == EQ_OP || ic->op == NE_OP || ic->op == '<' || ic->op == '>') &&
-                operandUsesSymbol (IC_LEFT (ic), sym) && IS_OP_LITERAL (IC_RIGHT (ic)))
-              continue;
-            if (ic->op == GET_VALUE_AT_ADDRESS && operandUsesSymbol (IC_LEFT (ic), sym))
-              continue;
-            if (ic->op == SET_VALUE_AT_ADDRESS && operandUsesSymbol (IC_LEFT (ic), sym))
-              continue;
-            if (POINTER_SET (ic) && operandUsesSymbol (IC_RESULT (ic), sym))
-              continue;
-            if (ic->op == PCALL && operandUsesSymbol (IC_LEFT (ic), sym))
-              continue;
-          }
-        return false;
       }
 
   return true;

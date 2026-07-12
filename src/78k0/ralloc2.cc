@@ -35,11 +35,9 @@ add_operand_conflicts_in_node (const cfg_node &, I_t &)
 static bool
 legal_layout (const std::vector<reg_t> &layout)
 {
-  const bool all_spilled = std::find_if (layout.begin (), layout.end (),
-                                         [](reg_t reg) { return reg >= 0; }) == layout.end ();
-  if (all_spilled)
+  if (std::all_of (layout.begin (), layout.end (), [](reg_t reg) { return reg < 0; }))
     return true;
-  if (std::find (layout.begin (), layout.end (), -1) != layout.end ())
+  if (std::any_of (layout.begin (), layout.end (), [](reg_t reg) { return reg < 0; }))
     return false;
 
   switch (layout.size ())
@@ -49,11 +47,11 @@ legal_layout (const std::vector<reg_t> &layout)
     case 2:
       return layout[0] % 2 == 0 && layout[1] == layout[0] + 1;
     case 3:
-      return layout[0] == K78K0_RB0_X_IDX && layout[1] == K78K0_RB0_A_IDX &&
-             layout[2] == K78K0_RB0_C_IDX;
     case 4:
-      return layout[0] == K78K0_RB0_X_IDX && layout[1] == K78K0_RB0_A_IDX &&
-             layout[2] == K78K0_RB0_C_IDX && layout[3] == K78K0_RB0_B_IDX;
+      for (unsigned byte = 0; byte < layout.size (); byte++)
+        if (layout[byte] != (reg_t)byte)
+          return false;
+      return true;
     default:
       return false;
     }
@@ -90,11 +88,7 @@ instruction_clobbers (const iCode *ic)
       /* Framed functions establish HL from SP at basic-block entries. */
       return MASK_AX;
     case '=':
-      if (!POINTER_SET (ic) && result_size == 1)
-        return MASK_AX | MASK_C;
-      if (POINTER_SET (ic))
-        return MASK_ALL;
-      return MASK_ALL;
+      return !POINTER_SET (ic) && result_size == 1 ? MASK_AX | MASK_C : MASK_ALL;
     case ADDRESS_OF:
       return MASK_AX;
     case GET_VALUE_AT_ADDRESS:
@@ -134,11 +128,9 @@ instruction_clobbers (const iCode *ic)
         return MASK_AX;
       return left_size == 1 ? MASK_AX | MASK_C : MASK_ALL;
     case IFX:
-      if (!IC_COND (ic))
+      if (!IC_COND (ic) || getSize (operandType (IC_COND (ic))) > 2)
         return MASK_ALL;
-      if (getSize (operandType (IC_COND (ic))) == 1)
-        return MASK_AX;
-      return getSize (operandType (IC_COND (ic))) == 2 ? MASK_AX | MASK_B : MASK_ALL;
+      return getSize (operandType (IC_COND (ic))) == 1 ? MASK_AX : MASK_AX | MASK_B;
     default:
       return MASK_ALL;
     }
@@ -165,6 +157,18 @@ right_operand_needs_ax_free (const iCode *ic)
     }
 }
 
+static bool
+operand_is_symbol (const operand *op, const int key)
+{
+  return op && IS_SYMOP (op) && OP_SYMBOL_CONST (op)->key == key;
+}
+
+struct value_layout
+{
+  std::vector<reg_t> registers;
+  bool survives = false;
+};
+
 template <class G_t>
 static bool
 operand_is_spilled (const operand *op, const assignment &a, unsigned short i, const G_t &G)
@@ -189,59 +193,45 @@ template <class G_t, class I_t>
 static bool
 inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
 {
-  std::map<int, std::vector<reg_t>> layouts;
-  std::map<int, std::vector<var_t>> variables;
+  const iCode *ic = G[i].ic;
+  const operand *left = IC_LEFT (ic);
+  const operand *right = IC_RIGHT (ic);
+  const int clobbers = instruction_clobbers (ic);
+  const bool right_needs_ax_free = right_operand_needs_ax_free (ic);
+  std::map<int, value_layout> values;
 
   for (var_t v : G[i].alive)
     {
-      std::vector<reg_t> &layout = layouts[I[v].v];
-      std::vector<var_t> &vars = variables[I[v].v];
+      value_layout &value = values[I[v].v];
 
-      if (layout.empty ())
-        {
-          layout.resize (I[v].size, -1);
-          vars.resize (I[v].size, -1);
-        }
-      layout[I[v].byte] = a.global[v];
-      vars[I[v].byte] = v;
+      if (value.registers.empty ())
+        value.registers.resize (I[v].size, -1);
+      value.registers[I[v].byte] = a.global[v];
+      value.survives |= G[i].dying.find (v) == G[i].dying.end ();
     }
 
-  for (const auto &entry : layouts)
+  for (const auto &entry : values)
     {
-      const std::vector<reg_t> &layout = entry.second;
-      const std::vector<var_t> &vars = variables[entry.first];
-      bool survives = false;
+      const std::vector<reg_t> &layout = entry.second.registers;
+      const bool byte_in_ax = layout.size () == 1 &&
+                              layout[0] >= K78K0_RB0_X_IDX && layout[0] <= K78K0_RB0_A_IDX;
 
       if (!legal_layout (layout))
         return false;
 
-      const operand *right = IC_RIGHT (G[i].ic);
-      if ((G[i].ic->op == LEFT_OP || G[i].ic->op == RIGHT_OP) && right && IS_SYMOP (right) &&
-          OP_SYMBOL_CONST (right)->key == entry.first && layout.size () == 1 &&
+      if ((ic->op == LEFT_OP || ic->op == RIGHT_OP) && operand_is_symbol (right, entry.first) && layout.size () == 1 &&
           layout[0] >= 0 && layout[0] != K78K0_RB0_C_IDX)
         return false;
 
-      if (layout.size () == 1 && layout[0] >= K78K0_RB0_X_IDX && layout[0] <= K78K0_RB0_A_IDX &&
-          right_operand_needs_ax_free (G[i].ic) && right && IS_SYMOP (right) &&
-          OP_SYMBOL_CONST (right)->key == entry.first)
+      if (byte_in_ax && right_needs_ax_free && operand_is_symbol (right, entry.first))
         return false;
 
-      const operand *left = IC_LEFT (G[i].ic);
-      if (layout.size () == 1 && layout[0] >= K78K0_RB0_X_IDX && layout[0] <= K78K0_RB0_A_IDX &&
-          right_operand_needs_ax_free (G[i].ic) && left && IS_SYMOP (left) &&
-          OP_SYMBOL_CONST (left)->key == entry.first && operand_is_spilled (right, a, i, G))
+      if (byte_in_ax && right_needs_ax_free &&
+          operand_is_symbol (left, entry.first) && operand_is_spilled (right, a, i, G))
         return false;
 
-      for (var_t v : vars)
-        if (v >= 0 && G[i].dying.find (v) == G[i].dying.end ())
-          {
-            const operand *result = IC_RESULT (G[i].ic);
-            if (POINTER_SET (G[i].ic) || !result || !IS_SYMOP (result) ||
-                OP_SYMBOL_CONST (result)->key != entry.first)
-              survives = true;
-          }
-
-      if (survives && (layout_registers (layout) & instruction_clobbers (G[i].ic)))
+      const bool overwritten = !POINTER_SET (ic) && operand_is_symbol (IC_RESULT (ic), entry.first);
+      if (entry.second.survives && !overwritten && (layout_registers (layout) & clobbers))
         return false;
     }
 
@@ -345,7 +335,7 @@ set_surviving_regs (const assignment &a, unsigned short i, const G_t &G, const I
       {
         ic->rMask = bitVectSetBit (ic->rMask, a.global[v]);
         if (G[i].dying.find (v) == G[i].dying.end () &&
-            (!IC_RESULT (ic) || !IS_SYMOP (IC_RESULT (ic)) || OP_SYMBOL_CONST (IC_RESULT (ic))->key != I[v].v))
+            !operand_is_symbol (IC_RESULT (ic), I[v].v))
           ic->rSurv = bitVectSetBit (ic->rSurv, a.global[v]);
       }
 }
@@ -368,8 +358,9 @@ allocate (T_t &T, G_t &G, const I_t &I)
 
   assignment context;
   bool optimal = true;
-  tree_dec_ralloc_nodes (T, find_root (T), G, conflicts, context, &optimal);
-  const assignment &winner = *T[find_root (T)].assignments.begin ();
+  const auto root = find_root (T);
+  tree_dec_ralloc_nodes (T, root, G, conflicts, context, &optimal);
+  const assignment &winner = *T[root].assignments.begin ();
 
   for (unsigned v = 0; v < boost::num_vertices (I); v++)
     {
@@ -382,6 +373,7 @@ allocate (T_t &T, G_t &G, const I_t &I)
     {
       symbol *sym = static_cast<symbol *> (hTabItemWithKey (liveRanges, I[v].v));
       bool spilled = false;
+
       for (int byte = 0; byte < I[v].size; byte++, v++)
         spilled |= winner.global[v] < 0;
       if (spilled)

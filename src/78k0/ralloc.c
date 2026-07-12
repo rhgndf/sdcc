@@ -163,7 +163,13 @@ blockIsReachable (const eBBlock *ebb)
 }
 
 static bool
-hasOnlyRegisterMoveUses (const symbol *sym)
+operandUsesSymbol (const operand *op, const symbol *sym)
+{
+  return op && IS_SYMOP (op) && OP_SYMBOL_CONST (op) == sym;
+}
+
+static bool
+hasRegisterSafeUses (const symbol *sym, const int size)
 {
   for (int key = 0; key < sym->uses->size; key++)
     if (bitVectBitValue (sym->uses, key))
@@ -178,6 +184,47 @@ hasOnlyRegisterMoveUses (const symbol *sym)
         if (ic->op == '=' && !POINTER_SET (ic) && IC_RIGHT (ic) &&
             IS_SYMOP (IC_RIGHT (ic)) && OP_SYMBOL_CONST (IC_RIGHT (ic)) == sym)
           continue;
+
+        if (size == 1)
+          {
+            if (ic->op == IFX && operandUsesSymbol (IC_COND (ic), sym))
+              continue;
+            if (ic->op == CAST && operandUsesSymbol (IC_RIGHT (ic), sym))
+              continue;
+            if (ic->op == '!' && operandUsesSymbol (IC_LEFT (ic), sym))
+              continue;
+            if ((ic->op == UNARYMINUS || ic->op == GETBYTE || ic->op == GETWORD || ic->op == GETABIT ||
+                 ic->op == IPUSH) && operandUsesSymbol (IC_LEFT (ic), sym))
+              continue;
+            if ((ic->op == '+' || ic->op == '-' || ic->op == '*' || ic->op == '/' || ic->op == '%' ||
+                 ic->op == BITWISEAND || ic->op == '|' || ic->op == '^' || ic->op == LEFT_OP ||
+                 ic->op == RIGHT_OP || ic->op == EQ_OP || ic->op == NE_OP || ic->op == '<' || ic->op == '>') &&
+                (operandUsesSymbol (IC_LEFT (ic), sym) || operandUsesSymbol (IC_RIGHT (ic), sym)))
+              continue;
+          }
+
+        if (size == 2)
+          {
+            if (ic->op == IFX && operandUsesSymbol (IC_COND (ic), sym))
+              continue;
+            if (ic->op == IPUSH && operandUsesSymbol (IC_LEFT (ic), sym))
+              continue;
+            if ((ic->op == '+' || ic->op == '-') &&
+                ((operandUsesSymbol (IC_LEFT (ic), sym) && IS_OP_LITERAL (IC_RIGHT (ic))) ||
+                 (ic->op == '+' && IS_OP_LITERAL (IC_LEFT (ic)) && operandUsesSymbol (IC_RIGHT (ic), sym))))
+              continue;
+            if ((ic->op == EQ_OP || ic->op == NE_OP || ic->op == '<' || ic->op == '>') &&
+                operandUsesSymbol (IC_LEFT (ic), sym) && IS_OP_LITERAL (IC_RIGHT (ic)))
+              continue;
+            if (ic->op == GET_VALUE_AT_ADDRESS && operandUsesSymbol (IC_LEFT (ic), sym))
+              continue;
+            if (ic->op == SET_VALUE_AT_ADDRESS && operandUsesSymbol (IC_LEFT (ic), sym))
+              continue;
+            if (POINTER_SET (ic) && operandUsesSymbol (IC_RESULT (ic), sym))
+              continue;
+            if (ic->op == PCALL && operandUsesSymbol (IC_LEFT (ic), sym))
+              continue;
+          }
         return false;
       }
 
@@ -195,7 +242,7 @@ hasRegisterSafeDefinitions (const symbol *sym, const int size)
         const iCode *ic = hTabItemWithKey (iCodehTab, key);
 
         found = true;
-        if (!ic || ic->op == RECEIVE)
+        if (!ic)
           return false;
         /* Wide arithmetic still uses BC internally; only canonical ABI/copy results are safe. */
         if (size > 2 && ic->op != CALL && ic->op != PCALL &&
@@ -248,7 +295,7 @@ k78k0_assignRegisters (ebbIndex *ebbi)
       sym->nRegs = size;
       sym->regType = REG_GPR;
       if (size <= 4 && sym->liveTo > sym->liveFrom &&
-          hasRegisterSafeDefinitions (sym, size) && hasOnlyRegisterMoveUses (sym))
+          hasRegisterSafeDefinitions (sym, size) && hasRegisterSafeUses (sym, size))
         sym->for_newralloc = 1;
     }
 

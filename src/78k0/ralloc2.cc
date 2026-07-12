@@ -19,6 +19,10 @@ extern "C"
 enum
 {
   MASK_AX = (1 << K78K0_RB0_X_IDX) | (1 << K78K0_RB0_A_IDX),
+  MASK_C = 1 << K78K0_RB0_C_IDX,
+  MASK_B = 1 << K78K0_RB0_B_IDX,
+  MASK_BC = (1 << K78K0_RB0_C_IDX) | (1 << K78K0_RB0_B_IDX),
+  MASK_DE = (1 << K78K0_RB0_E_IDX) | (1 << K78K0_RB0_D_IDX),
   MASK_ALL = (1 << 6) - 1,
 };
 
@@ -69,23 +73,116 @@ layout_registers (const std::vector<reg_t> &layout)
 static int
 instruction_clobbers (const iCode *ic)
 {
+  const operand *result = IC_RESULT (ic);
+  const operand *left = IC_LEFT (ic);
+  const operand *right = IC_RIGHT (ic);
+  const int result_size = result ? getSize (operandType (result)) : 0;
+  const int left_size = left ? getSize (operandType (left)) : 0;
+
   switch (ic->op)
     {
     case FUNCTION:
     case ENDFUNCTION:
-    case LABEL:
     case GOTO:
+    case RETURN:
       return 0;
+    case LABEL:
+      /* Framed functions establish HL from SP at basic-block entries. */
+      return MASK_AX;
     case '=':
-      if (!POINTER_SET (ic) && IC_RESULT (ic) && getSize (operandType (IC_RESULT (ic))) == 1)
-        return MASK_AX | (IS_TRUE_SYMOP (IC_RESULT (ic)) && OP_SYMBOL_CONST (IC_RESULT (ic))->onStack ?
-                          1 << K78K0_RB0_C_IDX : 0);
+      if (!POINTER_SET (ic) && result_size == 1)
+        return MASK_AX | MASK_C;
+      if (POINTER_SET (ic))
+        return MASK_ALL;
       return MASK_ALL;
+    case ADDRESS_OF:
+      return MASK_AX;
+    case GET_VALUE_AT_ADDRESS:
+      return MASK_AX | MASK_C | MASK_DE;
+    case SET_VALUE_AT_ADDRESS:
+      return MASK_ALL;
+    case '+':
+    case '-':
+      if (result_size == 2 && right && IS_OP_LITERAL (right) && left_size == 2)
+        return MASK_AX;
+      if (result_size == 1)
+        return MASK_AX | MASK_C;
+      return MASK_ALL;
+    case '*':
+      return result_size == 1 ? MASK_AX | MASK_BC : MASK_ALL;
+    case '/':
+    case '%':
+    case BITWISEAND:
+    case '|':
+    case '^':
+      return result_size == 1 ? MASK_AX | MASK_C : MASK_ALL;
+    case LEFT_OP:
+    case RIGHT_OP:
+      return result_size == 1 ? MASK_AX | MASK_BC : MASK_ALL;
+    case UNARYMINUS:
+    case '!':
+    case CAST:
+    case GETBYTE:
+    case GETWORD:
+    case GETABIT:
+      return result_size == 1 ? MASK_AX | MASK_C : MASK_ALL;
+    case EQ_OP:
+    case NE_OP:
+    case '<':
+    case '>':
+      if (left_size == 2 && right && IS_OP_LITERAL (right))
+        return MASK_AX;
+      return left_size == 1 ? MASK_AX | MASK_C : MASK_ALL;
     case IFX:
-      return IC_COND (ic) && getSize (operandType (IC_COND (ic))) == 1 ? MASK_AX : MASK_ALL;
+      if (!IC_COND (ic))
+        return MASK_ALL;
+      if (getSize (operandType (IC_COND (ic))) == 1)
+        return MASK_AX;
+      return getSize (operandType (IC_COND (ic))) == 2 ? MASK_AX | MASK_B : MASK_ALL;
     default:
       return MASK_ALL;
     }
+}
+
+static bool
+right_operand_needs_ax_free (const iCode *ic)
+{
+  switch (ic->op)
+    {
+    case '+':
+    case '-':
+    case '*':
+    case BITWISEAND:
+    case '|':
+    case '^':
+    case EQ_OP:
+    case NE_OP:
+    case '<':
+    case '>':
+      return true;
+    default:
+      return false;
+    }
+}
+
+template <class G_t>
+static bool
+operand_is_spilled (const operand *op, const assignment &a, unsigned short i, const G_t &G)
+{
+  if (!op || !IS_SYMOP (op))
+    return false;
+
+  const symbol *sym = OP_SYMBOL_CONST (op);
+  if (IS_TRUE_SYMOP (op))
+    return sym->onStack;
+  if (!IS_ITEMP (op))
+    return false;
+
+  const auto range = G[i].operands.equal_range (sym->key);
+  for (auto operand = range.first; operand != range.second; ++operand)
+    if (a.global[operand->second] < 0)
+      return true;
+  return false;
 }
 
 template <class G_t, class I_t>
@@ -118,11 +215,29 @@ inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
       if (!legal_layout (layout))
         return false;
 
+      const operand *right = IC_RIGHT (G[i].ic);
+      if ((G[i].ic->op == LEFT_OP || G[i].ic->op == RIGHT_OP) && right && IS_SYMOP (right) &&
+          OP_SYMBOL_CONST (right)->key == entry.first && layout.size () == 1 &&
+          layout[0] >= 0 && layout[0] != K78K0_RB0_C_IDX)
+        return false;
+
+      if (layout.size () == 1 && layout[0] >= K78K0_RB0_X_IDX && layout[0] <= K78K0_RB0_A_IDX &&
+          right_operand_needs_ax_free (G[i].ic) && right && IS_SYMOP (right) &&
+          OP_SYMBOL_CONST (right)->key == entry.first)
+        return false;
+
+      const operand *left = IC_LEFT (G[i].ic);
+      if (layout.size () == 1 && layout[0] >= K78K0_RB0_X_IDX && layout[0] <= K78K0_RB0_A_IDX &&
+          right_operand_needs_ax_free (G[i].ic) && left && IS_SYMOP (left) &&
+          OP_SYMBOL_CONST (left)->key == entry.first && operand_is_spilled (right, a, i, G))
+        return false;
+
       for (var_t v : vars)
         if (v >= 0 && G[i].dying.find (v) == G[i].dying.end ())
           {
             const operand *result = IC_RESULT (G[i].ic);
-            if (!result || !IS_SYMOP (result) || OP_SYMBOL_CONST (result)->key != entry.first)
+            if (POINTER_SET (G[i].ic) || !result || !IS_SYMOP (result) ||
+                OP_SYMBOL_CONST (result)->key != entry.first)
               survives = true;
           }
 

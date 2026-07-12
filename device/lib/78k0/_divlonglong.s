@@ -446,6 +446,37 @@ __divmodlonglong_magnitude:
 00305$:
 	mov	b,#0x40
 
+	; Skip leading zero dividend bits before shifting through the remainder.
+00307$:
+	clr1	cy
+	mov	a,[hl]
+	rolc	a,1
+	mov	[hl],a
+	mov	a,[hl+0x01]
+	rolc	a,1
+	mov	[hl+0x01],a
+	mov	a,[hl+0x02]
+	rolc	a,1
+	mov	[hl+0x02],a
+	mov	a,[hl+0x03]
+	rolc	a,1
+	mov	[hl+0x03],a
+	mov	a,[hl+0x04]
+	rolc	a,1
+	mov	[hl+0x04],a
+	mov	a,[hl+0x05]
+	rolc	a,1
+	mov	[hl+0x05],a
+	mov	a,[hl+0x06]
+	rolc	a,1
+	mov	[hl+0x06],a
+	mov	a,[hl+0x07]
+	rolc	a,1
+	mov	[hl+0x07],a
+	bc	00308$
+	dbnz	b,00307$
+	ret
+
 00301$:
 	clr1	cy
 	mov	a,[hl]
@@ -472,6 +503,8 @@ __divmodlonglong_magnitude:
 	mov	a,[hl+0x07]
 	rolc	a,1
 	mov	[hl+0x07],a
+
+00308$:
 	mov	a,[hl+0x08]
 	rolc	a,1
 	mov	[hl+0x08],a

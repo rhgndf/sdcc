@@ -122,6 +122,26 @@ __divmodulong:
 00006$:
 	mov	b,#0x20
 
+	; Skip leading zero dividend bits. They leave both quotient and remainder
+	; unchanged, so enter the full loop only when the first one reaches CY.
+00009$:
+	clr1	cy
+	mov	a,[hl]
+	rolc	a,1
+	mov	[hl],a
+	mov	a,[hl+0x01]
+	rolc	a,1
+	mov	[hl+0x01],a
+	mov	a,[hl+0x02]
+	rolc	a,1
+	mov	[hl+0x02],a
+	mov	a,[hl+0x03]
+	rolc	a,1
+	mov	[hl+0x03],a
+	bc	00010$
+	dbnz	b,00009$
+	br	!00005$
+
 00001$:
 	clr1	cy
 	mov	a,[hl]
@@ -136,6 +156,8 @@ __divmodulong:
 	mov	a,[hl+0x03]
 	rolc	a,1
 	mov	[hl+0x03],a
+
+00010$:
 	mov	a,[hl+0x04]
 	rolc	a,1
 	mov	[hl+0x04],a

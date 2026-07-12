@@ -28,6 +28,8 @@
 
 	.globl __divslong
 	.globl __modslong
+	.globl __divulong
+	.globl __modulong
 
 	.area CODE
 
@@ -35,7 +37,7 @@ __divslong:
 	push	ax
 	push	de
 	movw	ax,sp
-	subw	ax,#0x000e
+	subw	ax,#0x000a
 	movw	sp,ax
 	movw	hl,ax
 	mov	a,#0x00
@@ -45,19 +47,21 @@ __modslong:
 	push	ax
 	push	de
 	movw	ax,sp
-	subw	ax,#0x000e
+	subw	ax,#0x000a
 	movw	sp,ax
 	movw	hl,ax
 	mov	a,#0x01
 
 __divmodslong:
-	mov	[hl+0x0c],a
+	; Locals: magnitude/result [0..3], divisor [4..7], mode [8], sign [9].
+	mov	[hl+0x08],a
 	mov	a,#0x00
-	mov	[hl+0x0d],a
+	mov	[hl+0x09],a
 
-	mov	a,[hl+0x10]
+	; Save the register argument.
+	mov	a,[hl+0x0c]
 	mov	x,a
-	mov	a,[hl+0x11]
+	mov	a,[hl+0x0d]
 	mov	[hl+0x01],a
 	mov	a,x
 	mov	[hl],a
@@ -66,20 +70,23 @@ __divmodslong:
 	mov	a,b
 	mov	[hl+0x03],a
 
-	mov	a,[hl+0x14]
-	mov	[hl+0x08],a
-	mov	a,[hl+0x15]
-	mov	[hl+0x09],a
-	mov	a,[hl+0x16]
-	mov	[hl+0x0a],a
-	mov	a,[hl+0x17]
-	mov	[hl+0x0b],a
+	; Save the stack argument.
+	mov	a,[hl+0x10]
+	mov	[hl+0x04],a
+	mov	a,[hl+0x11]
+	mov	[hl+0x05],a
+	mov	a,[hl+0x12]
+	mov	[hl+0x06],a
+	mov	a,[hl+0x13]
+	mov	[hl+0x07],a
 
+	; Convert the dividend to its unsigned magnitude. The remainder sign is
+	; the dividend sign; the quotient sign is toggled below for the divisor.
 	mov	a,[hl+0x03]
 	and	a,#0x80
 	bz	00001$
 	mov	a,#0x01
-	mov	[hl+0x0d],a
+	mov	[hl+0x09],a
 	mov	a,[hl]
 	xor	a,#0xff
 	add	a,#0x01
@@ -98,109 +105,82 @@ __divmodslong:
 	mov	[hl+0x03],a
 
 00001$:
-	mov	a,[hl+0x0b]
+	mov	a,[hl+0x07]
 	and	a,#0x80
 	bz	00003$
-	mov	a,[hl+0x08]
+	mov	a,[hl+0x04]
 	xor	a,#0xff
 	add	a,#0x01
-	mov	[hl+0x08],a
-	mov	a,[hl+0x09]
+	mov	[hl+0x04],a
+	mov	a,[hl+0x05]
 	xor	a,#0xff
 	addc	a,#0x00
-	mov	[hl+0x09],a
-	mov	a,[hl+0x0a]
+	mov	[hl+0x05],a
+	mov	a,[hl+0x06]
 	xor	a,#0xff
 	addc	a,#0x00
-	mov	[hl+0x0a],a
-	mov	a,[hl+0x0b]
+	mov	[hl+0x06],a
+	mov	a,[hl+0x07]
 	xor	a,#0xff
 	addc	a,#0x00
-	mov	[hl+0x0b],a
+	mov	[hl+0x07],a
 
-	mov	a,[hl+0x0c]
+	mov	a,[hl+0x08]
 	cmp	a,#0x00
 	bnz	00003$
-	mov	a,[hl+0x0d]
+	mov	a,[hl+0x09]
 	xor	a,#0x01
-	mov	[hl+0x0d],a
+	mov	[hl+0x09],a
 
 00003$:
-	mov	a,#0x00
-	mov	[hl+0x04],a
-	mov	[hl+0x05],a
-	mov	[hl+0x06],a
-	mov	[hl+0x07],a
-	mov	b,#0x20
-
-00004$:
-	clr1	cy
-	mov	a,[hl]
-	rolc	a,1
-	mov	[hl],a
-	mov	a,[hl+0x01]
-	rolc	a,1
-	mov	[hl+0x01],a
+	; Call the unsigned magnitude helper, which also provides the DIVUW path.
+	mov	a,[hl+0x06]
+	mov	x,a
+	mov	a,[hl+0x07]
+	push	ax
+	mov	a,[hl+0x04]
+	mov	x,a
+	mov	a,[hl+0x05]
+	push	ax
+	mov	a,[hl+0x08]
+	cmp	a,#0x00
+	bnz	00004$
 	mov	a,[hl+0x02]
-	rolc	a,1
-	mov	[hl+0x02],a
+	mov	c,a
 	mov	a,[hl+0x03]
-	rolc	a,1
-	mov	[hl+0x03],a
-	mov	a,[hl+0x04]
-	rolc	a,1
-	mov	[hl+0x04],a
-	mov	a,[hl+0x05]
-	rolc	a,1
-	mov	[hl+0x05],a
-	mov	a,[hl+0x06]
-	rolc	a,1
-	mov	[hl+0x06],a
-	mov	a,[hl+0x07]
-	rolc	a,1
-	mov	[hl+0x07],a
-
-	mov	a,[hl+0x07]
-	cmp	a,[hl+0x0b]
-	bc	00005$
-	bnz	00006$
-	mov	a,[hl+0x06]
-	cmp	a,[hl+0x0a]
-	bc	00005$
-	bnz	00006$
-	mov	a,[hl+0x05]
-	cmp	a,[hl+0x09]
-	bc	00005$
-	bnz	00006$
-	mov	a,[hl+0x04]
-	cmp	a,[hl+0x08]
-	bc	00005$
-
-00006$:
-	mov	a,[hl+0x04]
-	sub	a,[hl+0x08]
-	mov	[hl+0x04],a
-	mov	a,[hl+0x05]
-	subc	a,[hl+0x09]
-	mov	[hl+0x05],a
-	mov	a,[hl+0x06]
-	subc	a,[hl+0x0a]
-	mov	[hl+0x06],a
-	mov	a,[hl+0x07]
-	subc	a,[hl+0x0b]
-	mov	[hl+0x07],a
+	mov	b,a
 	mov	a,[hl]
-	or	a,#0x01
-	mov	[hl],a
+	mov	x,a
+	mov	a,[hl+0x01]
+	call	!__divulong
+	br	!00005$
+00004$:
+	mov	a,[hl+0x02]
+	mov	c,a
+	mov	a,[hl+0x03]
+	mov	b,a
+	mov	a,[hl]
+	mov	x,a
+	mov	a,[hl+0x01]
+	call	!__modulong
 
 00005$:
-	dbnz	b,00004$
-	mov	a,[hl+0x0c]
+	; The unsigned helper cleans its stack argument and returns in BC:AX.
+	movw	de,ax
+	movw	ax,sp
+	movw	hl,ax
+	mov	a,e
+	mov	[hl],a
+	mov	a,d
+	mov	[hl+0x01],a
+	mov	a,c
+	mov	[hl+0x02],a
+	mov	a,b
+	mov	[hl+0x03],a
+
+	mov	a,[hl+0x09]
 	cmp	a,#0x00
-	bnz	00008$
-	mov	a,[hl+0x0d]
-	cmp	a,#0x00
-	bz	00007$
+	bz	00006$
 	mov	a,[hl]
 	xor	a,#0xff
 	add	a,#0x01
@@ -217,52 +197,19 @@ __divmodslong:
 	xor	a,#0xff
 	addc	a,#0x00
 	mov	[hl+0x03],a
-00007$:
-	br	!00010$
 
-00008$:
-	mov	a,[hl+0x0d]
-	cmp	a,#0x00
-	bz	00009$
-	mov	a,[hl+0x04]
-	xor	a,#0xff
-	add	a,#0x01
-	mov	[hl+0x04],a
-	mov	a,[hl+0x05]
-	xor	a,#0xff
-	addc	a,#0x00
-	mov	[hl+0x05],a
-	mov	a,[hl+0x06]
-	xor	a,#0xff
-	addc	a,#0x00
-	mov	[hl+0x06],a
-	mov	a,[hl+0x07]
-	xor	a,#0xff
-	addc	a,#0x00
-	mov	[hl+0x07],a
-00009$:
-	mov	a,[hl+0x04]
-	mov	[hl],a
-	mov	a,[hl+0x05]
-	mov	[hl+0x01],a
-	mov	a,[hl+0x06]
-	mov	[hl+0x02],a
-	mov	a,[hl+0x07]
-	mov	[hl+0x03],a
-
-00010$:
-	mov	a,[hl+0x0e]
+00006$:
+	; Restore DE and move the return address past the callee-cleaned argument.
+	mov	a,[hl+0x0a]
 	mov	x,a
-	mov	a,[hl+0x0f]
+	mov	a,[hl+0x0b]
 	movw	de,ax
-
-	mov	a,[hl+0x13]
-	mov	[hl+0x17],a
-	mov	a,[hl+0x12]
-	mov	[hl+0x16],a
-
+	mov	a,[hl+0x0f]
+	mov	[hl+0x13],a
+	mov	a,[hl+0x0e]
+	mov	[hl+0x12],a
 	movw	ax,sp
-	addw	ax,#0x0016
+	addw	ax,#0x0012
 	movw	sp,ax
 	mov	a,[hl+0x02]
 	mov	c,a

@@ -17,16 +17,6 @@ static int spill_slot_id;
 static set *spill_slots;
 bitVect *k78k0_partial_allocations;
 
-static void
-setRematerializable (operand *result, iCode *remat_ic)
-{
-  symbol *sym = OP_SYMBOL (result);
-
-  sym->remat = 1;
-  sym->rematiCode = remat_ic;
-  sym->usl.spillLoc = NULL;
-}
-
 reg_info k78k0_regs[] =
 {
   {REG_GPR, K78K0_RB0_X_IDX, "x"},
@@ -43,51 +33,47 @@ static void
 markRematerializable (iCode *ic)
 {
   operand *result = IC_RESULT (ic);
+  operand *left = IC_LEFT (ic);
+  operand *right = IC_RIGHT (ic);
+  iCode *remat_ic = NULL;
 
-  if (!result || !IS_ITEMP (result) || POINTER_SET (ic))
+  if (!result || !IS_ITEMP (result) || POINTER_SET (ic) ||
+      bitVectnBitsOn (OP_DEFS (result)) != 1 || IS_PARM (result))
     return;
 
-  if (bitVectnBitsOn (OP_DEFS (result)) != 1 || IS_PARM (result))
-    return;
-
-  if (ic->op == ADDRESS_OF && IS_TRUE_SYMOP (IC_LEFT (ic)))
-    {
-      setRematerializable (result, ic);
-      return;
-    }
-
-  if ((ic->op == '=' || ic->op == CAST) && IS_SYMOP (IC_RIGHT (ic)) &&
-      OP_SYMBOL (IC_RIGHT (ic))->remat && !isOperandGlobal (result) &&
-      !OP_SYMBOL (result)->addrtaken)
+  if (ic->op == ADDRESS_OF && IS_TRUE_SYMOP (left))
+    remat_ic = ic;
+  else if ((ic->op == '=' || ic->op == CAST) && IS_SYMOP (right) &&
+           OP_SYMBOL (right)->remat && !isOperandGlobal (result) && !OP_SYMBOL (result)->addrtaken)
     {
       if (ic->op == '=')
-        setRematerializable (result, OP_SYMBOL (IC_RIGHT (ic))->rematiCode);
-      else if (IS_PTR (operandType (IC_LEFT (ic))) && IS_PTR (operandType (IC_RIGHT (ic))))
-        setRematerializable (result, ic);
-      return;
+        remat_ic = OP_SYMBOL (right)->rematiCode;
+      else if (IS_PTR (operandType (left)) && IS_PTR (operandType (right)))
+        remat_ic = ic;
     }
+  else if ((ic->op == '+' || ic->op == '-') && IS_OP_LITERAL (right) &&
+           IS_SYMOP (left) && OP_SYMBOL (left)->remat)
+    remat_ic = ic;
+  else if (ic->op == '+' && IS_OP_LITERAL (left) && IS_SYMOP (right) && OP_SYMBOL (right)->remat)
+    remat_ic = ic;
 
-  if ((ic->op == '+' || ic->op == '-') && IS_OP_LITERAL (IC_RIGHT (ic)) &&
-      IS_SYMOP (IC_LEFT (ic)) && OP_SYMBOL (IC_LEFT (ic))->remat)
+  if (remat_ic)
     {
-      setRematerializable (result, ic);
-      return;
+      symbol *sym = OP_SYMBOL (result);
+      sym->remat = 1;
+      sym->rematiCode = remat_ic;
+      sym->usl.spillLoc = NULL;
     }
-
-  if (ic->op == '+' && IS_OP_LITERAL (IC_LEFT (ic)) &&
-      IS_SYMOP (IC_RIGHT (ic)) && OP_SYMBOL (IC_RIGHT (ic))->remat)
-    setRematerializable (result, ic);
 }
 
 static bool
 spillSlotAvailable (const symbol *slot, const symbol *sym, const int size)
 {
-  symbol *occupant;
-
   if (getSize (slot->type) < size)
     return false;
 
-  for (occupant = setFirstItem (slot->usl.itmpStack); occupant; occupant = setNextItem (slot->usl.itmpStack))
+  for (symbol *occupant = setFirstItem (slot->usl.itmpStack); occupant;
+       occupant = setNextItem (slot->usl.itmpStack))
     if (bitVectBitValue (sym->clashes, occupant->key))
       return false;
 
@@ -97,9 +83,7 @@ spillSlotAvailable (const symbol *slot, const symbol *sym, const int size)
 static symbol *
 findSpillSlot (const symbol *sym, const int size)
 {
-  symbol *slot;
-
-  for (slot = setFirstItem (spill_slots); slot; slot = setNextItem (spill_slots))
+  for (symbol *slot = setFirstItem (spill_slots); slot; slot = setNextItem (spill_slots))
     if (spillSlotAvailable (slot, sym, size))
       return slot;
 
@@ -158,12 +142,6 @@ k78k0SpillThis (symbol *sym, bool force_spill)
 }
 
 static bool
-blockIsReachable (const eBBlock *ebb)
-{
-  return !ebb->noPath || ebb->entryLabel == entryLabel || ebb->entryLabel == returnLabel;
-}
-
-static bool
 operandUsesSymbol (const operand *op, const symbol *sym)
 {
   return op && IS_SYMOP (op) && OP_SYMBOL_CONST (op) == sym;
@@ -197,25 +175,17 @@ isRegisterSafeUse (const iCode *ic, const symbol *sym, const int size)
     return operandUsesSymbol (IC_COND (ic), sym);
   if (ic->op == IPUSH)
     return uses_left;
-
-  if (size == 1)
-    {
-      if (ic->op == CAST)
-        return uses_right;
-      if (ic->op == '!' || ic->op == UNARYMINUS || ic->op == GETBYTE ||
-          ic->op == GETWORD || ic->op == GETABIT)
-        return uses_left;
-      return isByteBinaryOperation (ic->op) && (uses_left || uses_right);
-    }
-
-  if (size != 2)
-    return false;
-
   if (ic->op == CAST)
     return uses_right;
   if (ic->op == '!' || ic->op == UNARYMINUS || ic->op == GETBYTE ||
       ic->op == GETWORD || ic->op == GETABIT)
     return uses_left;
+
+  if (size == 1)
+    return isByteBinaryOperation (ic->op) && (uses_left || uses_right);
+
+  if (size != 2)
+    return false;
 
   if (ic->op == GET_VALUE_AT_ADDRESS || ic->op == SET_VALUE_AT_ADDRESS || ic->op == PCALL)
     return uses_left;
@@ -253,29 +223,18 @@ hasRegisterSafeDefinitions (const symbol *sym, const int size)
         const iCode *ic = hTabItemWithKey (iCodehTab, key);
 
         found = true;
-        if (!ic)
-          return false;
         /* Wide arithmetic still uses BC internally; only canonical ABI/copy results are safe. */
-        if (size > 2 && ic->op != CALL && ic->op != PCALL &&
-            (ic->op != '=' || POINTER_SET (ic)))
+        if (!ic || (size > 2 && ic->op != CALL && ic->op != PCALL &&
+                    (ic->op != '=' || POINTER_SET (ic))))
           return false;
       }
 
   return found;
 }
 
-static bool
-needsSpillStorage (const symbol *sym)
-{
-  /* Hidden destinations are needed even when the call result itself is unused. */
-  return sym->liveTo > sym->liveFrom || sym->nRegs > 4 || IS_STRUCT (sym->type);
-}
-
 void
 k78k0_assignRegisters (ebbIndex *ebbi)
 {
-  eBBlock **ebbs = ebbi->bbOrder;
-  int count = ebbi->count;
   iCode *ic_head;
   symbol *sym;
   int key;
@@ -285,14 +244,13 @@ k78k0_assignRegisters (ebbIndex *ebbi)
   freeBitVect (k78k0_partial_allocations);
   k78k0_partial_allocations = NULL;
 
-  for (int i = 0; i < count; i++)
+  for (int i = 0; i < ebbi->count; i++)
     {
-      iCode *ic;
-
-      if (!blockIsReachable (ebbs[i]))
+      eBBlock *ebb = ebbi->bbOrder[i];
+      if (ebb->noPath && ebb->entryLabel != entryLabel && ebb->entryLabel != returnLabel)
         continue;
 
-      for (ic = ebbs[i]->sch; ic; ic = ic->next)
+      for (iCode *ic = ebb->sch; ic; ic = ic->next)
         markRematerializable (ic);
     }
 
@@ -300,23 +258,23 @@ k78k0_assignRegisters (ebbIndex *ebbi)
     {
       const int size = getSize (sym->type);
 
-      sym->for_newralloc = 0;
       sym->nRegs = 0;
+      sym->for_newralloc = 0;
       if (!sym->isitmp || sym->regType == REG_CND || sym->remat || size < 1)
         continue;
 
       sym->nRegs = size;
       sym->regType = REG_GPR;
-      if (size <= 4 && sym->liveTo > sym->liveFrom &&
-          hasRegisterSafeDefinitions (sym, size) && hasRegisterSafeUses (sym, size))
-        sym->for_newralloc = 1;
+      sym->for_newralloc = size <= 4 && sym->liveTo > sym->liveFrom &&
+                           hasRegisterSafeDefinitions (sym, size) && hasRegisterSafeUses (sym, size);
     }
 
   ic_head = k78k0_ralloc2_cc (ebbi);
 
+  /* Hidden destinations need storage even when the call result itself is unused. */
   for (sym = hTabFirstItem (liveRanges, &key); sym; sym = hTabNextItem (liveRanges, &key))
     if (sym->isitmp && !sym->remat && !sym->isspilt && !sym->regs[0] &&
-        sym->nRegs > 0 && needsSpillStorage (sym))
+        sym->nRegs > 0 && (sym->liveTo > sym->liveFrom || sym->nRegs > 4 || IS_STRUCT (sym->type)))
       k78k0SpillThis (sym, true);
 
   if (options.dump_i_code)

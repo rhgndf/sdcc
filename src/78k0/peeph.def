@@ -206,6 +206,47 @@ replace restart {
 	movw	ax,#%3 + %4
 }
 
+// Conditional branches have only an 8-bit displacement. Code generation uses
+// an inverse branch around an absolute BR; collapse it when the target is near.
+
+replace restart {
+	bz	%1
+	br	!%2
+%1:
+} by {
+	bnz	%2
+} if labelInRange(%2), labelRefCount(%1 1), labelRefCountChange(%1 -1)
+
+replace restart {
+	bnz	%1
+	br	!%2
+%1:
+} by {
+	bz	%2
+} if labelInRange(%2), labelRefCount(%1 1), labelRefCountChange(%1 -1)
+
+replace restart {
+	bc	%1
+	br	!%2
+%1:
+} by {
+	bnc	%2
+} if labelInRange(%2), labelRefCount(%1 1), labelRefCountChange(%1 -1)
+
+replace restart {
+	bnc	%1
+	br	!%2
+%1:
+} by {
+	bc	%2
+} if labelInRange(%2), labelRefCount(%1 1), labelRefCountChange(%1 -1)
+
+replace restart {
+	br	!%1
+} by {
+	br	%1
+} if labelInRange(%1)
+
 // A branch to the immediately following label has no effect. The absolute
 // form needs a separate rule because '!' is part of its operand syntax.
 

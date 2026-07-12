@@ -27,10 +27,7 @@ enum
 };
 
 template <class I_t>
-static void
-add_operand_conflicts_in_node (const cfg_node &, I_t &)
-{
-}
+static void add_operand_conflicts_in_node (const cfg_node &, I_t &) {}
 
 static bool
 legal_layout (const std::vector<reg_t> &layout)
@@ -38,55 +35,31 @@ legal_layout (const std::vector<reg_t> &layout)
   if (std::all_of (layout.begin (), layout.end (), [](reg_t reg) { return reg < 0; }))
     return true;
 
-  const bool partly_spilled =
-    std::any_of (layout.begin (), layout.end (), [](reg_t reg) { return reg < 0; });
-  if (partly_spilled)
+  const bool has_spill = std::any_of (layout.begin (), layout.end (), [](reg_t reg) { return reg < 0; });
+  if (layout.size () >= 3)
     {
-      if (layout.size () != 4)
+      if (layout.size () > 4)
         return false;
       for (unsigned byte = 0; byte < layout.size (); byte++)
         if (layout[byte] >= 0 && layout[byte] != (reg_t)byte)
           return false;
-      return (layout[0] < 0) == (layout[1] < 0) &&
-             (layout[2] < 0) == (layout[3] < 0);
+      return !has_spill || (layout.size () == 4 &&
+                            (layout[0] < 0) == (layout[1] < 0) &&
+                            (layout[2] < 0) == (layout[3] < 0));
     }
 
-  switch (layout.size ())
-    {
-    case 1:
-      return layout[0] >= K78K0_RB0_X_IDX && layout[0] <= K78K0_RB0_D_IDX;
-    case 2:
-      return layout[0] % 2 == 0 && layout[1] == layout[0] + 1;
-    case 3:
-    case 4:
-      for (unsigned byte = 0; byte < layout.size (); byte++)
-        if (layout[byte] != (reg_t)byte)
-          return false;
-      return true;
-    default:
-      return false;
-    }
-}
-
-static int
-layout_registers (const std::vector<reg_t> &layout)
-{
-  int registers = 0;
-
-  for (reg_t reg : layout)
-    if (reg >= 0)
-      registers |= 1 << reg;
-  return registers;
+  if (has_spill)
+    return false;
+  return layout.size () == 1 ? layout[0] >= K78K0_RB0_X_IDX && layout[0] <= K78K0_RB0_D_IDX :
+         layout.size () == 2 && layout[0] % 2 == 0 && layout[1] == layout[0] + 1;
 }
 
 static int
 instruction_clobbers (const iCode *ic)
 {
-  const operand *result = IC_RESULT (ic);
-  const operand *left = IC_LEFT (ic);
   const operand *right = IC_RIGHT (ic);
-  const int result_size = result ? getSize (operandType (result)) : 0;
-  const int left_size = left ? getSize (operandType (left)) : 0;
+  const int result_size = IC_RESULT (ic) ? getSize (operandType (IC_RESULT (ic))) : 0;
+  const int left_size = IC_LEFT (ic) ? getSize (operandType (IC_LEFT (ic))) : 0;
 
   switch (ic->op)
     {
@@ -96,16 +69,13 @@ instruction_clobbers (const iCode *ic)
     case RETURN:
       return 0;
     case LABEL:
-      /* Framed functions establish HL from SP at basic-block entries. */
+      /* Labels conservatively invalidate the AX value tracked by the allocator. */
+    case ADDRESS_OF:
       return MASK_AX;
     case '=':
       return !POINTER_SET (ic) && result_size == 1 ? MASK_AX | MASK_C : MASK_ALL;
-    case ADDRESS_OF:
-      return MASK_AX;
     case GET_VALUE_AT_ADDRESS:
       return MASK_AX | MASK_C | MASK_DE;
-    case SET_VALUE_AT_ADDRESS:
-      return MASK_ALL;
     case '+':
     case '-':
       if (result_size == 2 && right && IS_OP_LITERAL (right) && left_size == 2)
@@ -149,27 +119,6 @@ instruction_clobbers (const iCode *ic)
 }
 
 static bool
-right_operand_needs_ax_free (const iCode *ic)
-{
-  switch (ic->op)
-    {
-    case '+':
-    case '-':
-    case '*':
-    case BITWISEAND:
-    case '|':
-    case '^':
-    case EQ_OP:
-    case NE_OP:
-    case '<':
-    case '>':
-      return true;
-    default:
-      return false;
-    }
-}
-
-static bool
 operand_is_symbol (const operand *op, const int key)
 {
   return op && IS_SYMOP (op) && OP_SYMBOL_CONST (op)->key == key;
@@ -209,7 +158,9 @@ inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
   const operand *left = IC_LEFT (ic);
   const operand *right = IC_RIGHT (ic);
   const int clobbers = instruction_clobbers (ic);
-  const bool right_needs_ax_free = right_operand_needs_ax_free (ic);
+  const bool right_needs_ax_free = ic->op == '+' || ic->op == '-' || ic->op == '*' ||
+    ic->op == BITWISEAND || ic->op == '|' || ic->op == '^' || ic->op == EQ_OP ||
+    ic->op == NE_OP || ic->op == '<' || ic->op == '>';
   std::map<int, value_layout> values;
 
   for (var_t v : G[i].alive)
@@ -227,6 +178,11 @@ inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
       const std::vector<reg_t> &layout = entry.second.registers;
       const bool byte_in_register = layout.size () == 1 && layout[0] >= 0;
       const bool byte_in_ax = byte_in_register && layout[0] <= K78K0_RB0_A_IDX;
+      int registers = 0;
+
+      for (reg_t reg : layout)
+        if (reg >= 0)
+          registers |= 1 << reg;
 
       if (!legal_layout (layout))
         return false;
@@ -235,15 +191,13 @@ inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
           byte_in_register && layout[0] != K78K0_RB0_C_IDX)
         return false;
 
-      if (byte_in_ax && right_needs_ax_free && operand_is_symbol (right, entry.first))
-        return false;
-
       if (byte_in_ax && right_needs_ax_free &&
-          operand_is_symbol (left, entry.first) && operand_is_spilled (right, a, i, G))
+          (operand_is_symbol (right, entry.first) ||
+           (operand_is_symbol (left, entry.first) && operand_is_spilled (right, a, i, G))))
         return false;
 
       const bool overwritten = !POINTER_SET (ic) && operand_is_symbol (IC_RESULT (ic), entry.first);
-      if (entry.second.survives && !overwritten && (layout_registers (layout) & clobbers))
+      if (entry.second.survives && !overwritten && (registers & clobbers))
         return false;
     }
 
@@ -338,10 +292,7 @@ get_best_local_assignment_biased (assignment &a,
   a.local.swap (local);
 }
 
-static void
-extra_ic_generated (iCode *)
-{
-}
+static void extra_ic_generated (iCode *) {}
 
 template <class G_t, class I_t>
 static void
@@ -386,7 +337,8 @@ allocate (T_t &T, G_t &G, const I_t &I)
   for (unsigned v = 0; v < boost::num_vertices (I); v++)
     {
       symbol *sym = static_cast<symbol *> (hTabItemWithKey (liveRanges, I[v].v));
-      sym->regs[I[v].byte] = winner.global[v] >= 0 ? k78k0_regs + winner.global[v] : NULL;
+      const reg_t reg = winner.global[v];
+      sym->regs[I[v].byte] = reg >= 0 ? k78k0_regs + reg : NULL;
       sym->nRegs = I[v].size;
     }
 
@@ -394,20 +346,16 @@ allocate (T_t &T, G_t &G, const I_t &I)
     {
       symbol *sym = static_cast<symbol *> (hTabItemWithKey (liveRanges, I[v].v));
       const int size = I[v].size;
-      bool spilled = false;
-      bool allocated = false;
+      const auto first = winner.global.begin () + v;
+      const auto last = first + size;
 
-      for (int byte = 0; byte < size; byte++, v++)
-        {
-          spilled |= winner.global[v] < 0;
-          allocated |= winner.global[v] >= 0;
-        }
-      if (spilled)
+      if (std::any_of (first, last, [](reg_t reg) { return reg < 0; }))
         {
           k78k0SpillThis (sym, false);
-          if (allocated && size == 4)
+          if (size == 4 && std::any_of (first, last, [](reg_t reg) { return reg >= 0; }))
             k78k0_partial_allocations = bitVectSetBit (k78k0_partial_allocations, sym->key);
         }
+      v += size;
     }
 
   for (unsigned i = 0; i < boost::num_vertices (G); i++)

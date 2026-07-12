@@ -235,6 +235,24 @@ k78k0_dwarfRegNum (const struct reg_info *reg)
   return reg->rIdx;
 }
 
+static int
+k78k0_instructionSize (lineNode *line)
+{
+  const char *text = line->line;
+
+  while (isspace ((unsigned char)*text))
+    text++;
+
+  if (!*text || *text == ';' || strchr (text, ':'))
+    return 0;
+  if (*text == '.')
+    return 999;
+
+  /* Four bytes is the longest 78K0 instruction. Overestimating shorter
+     forms keeps labelInRange conservative without duplicating the assembler. */
+  return 4;
+}
+
 static bool
 k78k0_isPromotedUnsignedByte (const iCode *ic)
 {
@@ -333,7 +351,7 @@ PORT k78k0_port =
   },
   {
     k78k0_defaultRules,
-    NULL,
+    k78k0_instructionSize,
     NULL,
     NULL,
     NULL,

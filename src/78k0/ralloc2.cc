@@ -213,14 +213,14 @@ inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
   for (const auto &entry : values)
     {
       const std::vector<reg_t> &layout = entry.second.registers;
-      const bool byte_in_ax = layout.size () == 1 &&
-                              layout[0] >= K78K0_RB0_X_IDX && layout[0] <= K78K0_RB0_A_IDX;
+      const bool byte_in_register = layout.size () == 1 && layout[0] >= 0;
+      const bool byte_in_ax = byte_in_register && layout[0] <= K78K0_RB0_A_IDX;
 
       if (!legal_layout (layout))
         return false;
 
-      if ((ic->op == LEFT_OP || ic->op == RIGHT_OP) && operand_is_symbol (right, entry.first) && layout.size () == 1 &&
-          layout[0] >= 0 && layout[0] != K78K0_RB0_C_IDX)
+      if ((ic->op == LEFT_OP || ic->op == RIGHT_OP) && operand_is_symbol (right, entry.first) &&
+          byte_in_register && layout[0] != K78K0_RB0_C_IDX)
         return false;
 
       if (byte_in_ax && right_needs_ax_free && operand_is_symbol (right, entry.first))

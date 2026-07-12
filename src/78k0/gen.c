@@ -1193,6 +1193,8 @@ operandByteOnStack (const operand *op, const int offset)
   op = resolveCodegenOperand (op);
   if (!IS_SYMOP (op))
     return false;
+  if (operandRegisterByte (op, offset))
+    return false;
 
   sym = operandStorageSymbol (op);
   return sym->onStack && stackByteOffset (sym, offset) >= 0;

@@ -434,6 +434,6 @@ PORT k78k0_port =
   false,
   1,
   1,
-  32,
+  6,
   PORT_MAGIC
 };

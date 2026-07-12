@@ -112,6 +112,106 @@ operandStorageSymbol (const operand *op)
   return sym;
 }
 
+static const reg_info *
+symbolRegisterByte (const symbol *sym, const int offset)
+{
+  if (!sym || sym->isspilt || offset < 0 || offset >= sym->nRegs)
+    return NULL;
+
+  return sym->regs[offset];
+}
+
+static const reg_info *
+operandRegisterByte (const operand *op, const int offset)
+{
+  return IS_SYMOP (op) ? symbolRegisterByte (OP_SYMBOL_CONST (op), offset) : NULL;
+}
+
+static const char *
+byteRegisterName (const reg_info *reg)
+{
+  wassertl (reg && reg->rIdx >= K78K0_RB0_X_IDX && reg->rIdx <= K78K0_RB0_D_IDX,
+            "invalid 78K0 allocated byte register");
+  return reg->name;
+}
+
+static const char *
+symbolRegisterPair (const symbol *sym)
+{
+  const reg_info *low = symbolRegisterByte (sym, 0);
+  const reg_info *high = symbolRegisterByte (sym, 1);
+
+  if (!low || !high)
+    return NULL;
+  if (low->rIdx == K78K0_RB0_X_IDX && high->rIdx == K78K0_RB0_A_IDX)
+    return "ax";
+  if (low->rIdx == K78K0_RB0_C_IDX && high->rIdx == K78K0_RB0_B_IDX)
+    return "bc";
+  if (low->rIdx == K78K0_RB0_E_IDX && high->rIdx == K78K0_RB0_D_IDX)
+    return "de";
+  return NULL;
+}
+
+static bool
+operandIsAllocated (const operand *op)
+{
+  return IS_SYMOP (op) && symbolRegisterByte (OP_SYMBOL_CONST (op), 0);
+}
+
+static void
+movePair (const char *destination, const char *source)
+{
+  if (!strcmp (destination, source))
+    return;
+
+  if (!strcmp (destination, "ax"))
+    emit2 ("movw", "ax,%s", source);
+  else if (!strcmp (source, "ax"))
+    emit2 ("movw", "%s,ax", destination);
+  else
+    {
+      emit2 ("movw", "ax,%s", source);
+      emit2 ("movw", "%s,ax", destination);
+    }
+  clearAResult ();
+}
+
+static bool
+storeReturnValueToAllocatedOperand (const operand *op, const int size)
+{
+  const symbol *sym;
+
+  if (!operandIsAllocated (op) || size < 1 || size > 4)
+    return false;
+
+  sym = OP_SYMBOL_CONST (op);
+  if (size == 1)
+    {
+      const char *destination = byteRegisterName (symbolRegisterByte (sym, 0));
+      if (strcmp (destination, "a"))
+        emit2 ("mov", "%s,a", destination);
+      clearAResult ();
+      return true;
+    }
+
+  if (size == 2)
+    {
+      const char *destination = symbolRegisterPair (sym);
+      if (!destination)
+        return false;
+      movePair (destination, "ax");
+      return true;
+    }
+
+  /* Three- and four-byte allocations use the ABI C:AX / BC:AX layout. */
+  const bool canonical = symbolRegisterByte (sym, 0)->rIdx == K78K0_RB0_X_IDX &&
+                         symbolRegisterByte (sym, 1)->rIdx == K78K0_RB0_A_IDX &&
+                         symbolRegisterByte (sym, 2)->rIdx == K78K0_RB0_C_IDX &&
+                         (size == 3 || symbolRegisterByte (sym, 3)->rIdx == K78K0_RB0_B_IDX);
+  clearAResult ();
+  return canonical;
+}
+
 static const operand *
 operandReqv (const operand *op)
 {
@@ -449,6 +549,17 @@ setAResult (const operand *op)
       const symbol *sym = OP_SYMBOL_CONST (op);
       const symbol *storage = operandStorageSymbol (op);
 
+      if (symbolRegisterByte (sym, 0))
+        {
+          const char *destination = byteRegisterName (symbolRegisterByte (sym, 0));
+          if (strcmp (destination, "a"))
+            {
+              emit2 ("mov", "%s,a", destination);
+              clearAResult ();
+              return;
+            }
+        }
+
       if (storage != sym)
         {
           if (storeAccumulatorToStack (storage, 1))
@@ -472,6 +583,23 @@ setReturnResult (const operand *op, const int size)
     {
       const symbol *sym = OP_SYMBOL_CONST (op);
       const symbol *storage = operandStorageSymbol (op);
+
+      if (symbolRegisterByte (sym, 0))
+        {
+          if (size == 1)
+            {
+              setAResult (op);
+              return;
+            }
+
+          const char *destination = symbolRegisterPair (sym);
+          wassertl (destination, "invalid 78K0 allocated word layout");
+          if (strcmp (destination, "ax"))
+            {
+              movePair (destination, "ax");
+              return;
+            }
+        }
 
       if (storage != sym)
         {
@@ -981,6 +1109,13 @@ loadOperandLowWordToAX (const operand *op)
   if (IS_SYMOP (op))
     {
       const symbol *sym = operandStorageSymbol (op);
+      const char *pair = symbolRegisterPair (OP_SYMBOL_CONST (op));
+
+      if (pair)
+        {
+          movePair ("ax", pair);
+          return true;
+        }
 
       return sym->onStack ? loadStackToReturnValue (sym, 2) : loadDirectToReturnValue (sym, 2);
     }
@@ -997,6 +1132,19 @@ loadOperandByteToA (const operand *op, const int offset)
   op = resolveReqvOperand (op);
   type = operandType (op);
   size = k78k0_operandSize (op);
+
+  if (IS_SYMOP (op))
+    {
+      const reg_info *reg = operandRegisterByte (op, offset);
+      if (reg)
+        {
+          const char *source = byteRegisterName (reg);
+          if (strcmp (source, "a"))
+            emit2 ("mov", "a,%s", source);
+          clearAResult ();
+          return true;
+        }
+    }
 
   if (operandInA (op, offset))
     return true;
@@ -1257,9 +1405,20 @@ static bool
 storeAToOperandByte (const operand *op, const int offset)
 {
   const symbol *sym;
+  const reg_info *reg;
 
   if (!IS_SYMOP (op))
     return false;
+
+  reg = operandRegisterByte (op, offset);
+  if (reg)
+    {
+      const char *destination = byteRegisterName (reg);
+      if (strcmp (destination, "a"))
+        emit2 ("mov", "%s,a", destination);
+      clearAResult ();
+      return true;
+    }
 
   sym = operandStorageSymbol (op);
   if (sym->onStack)
@@ -1419,10 +1578,49 @@ storeReturnValueToStack (const operand *right, const symbol *sym, const int size
 }
 
 static bool
+storeAllocatedOperandToSymbol (const operand *right, const symbol *sym, const int size)
+{
+  static const int order[] = {1, 0, 2, 3};
+
+  if (!operandIsAllocated (right) || size < 1 || size > 4)
+    return false;
+
+  if (sym->onStack)
+    {
+      if (size == 1)
+        return loadOperandByteToA (right, 0) && storeAccumulatorToStack (sym, 1);
+      if (size == 2)
+        return loadOperandLowWordToAX (right) && storeAccumulatorToStack (sym, 2);
+      return genOperandReturnValue (right) && storeReturnRegistersToStack (sym, size);
+    }
+
+  if (size == 1)
+    {
+      if (!loadOperandByteToA (right, 0))
+        return false;
+      storeAToDirectByte (sym, 0);
+      return true;
+    }
+
+  for (int i = 0; i < size; i++)
+    {
+      const int offset = order[i];
+
+      if (!loadOperandByteToA (right, offset))
+        return false;
+      storeAToDirectByte (sym, offset);
+    }
+  return true;
+}
+
+static bool
 storeOperandToSymbol (const operand *right, const symbol *sym, const int size)
 {
   if (!sym || size > K78K0_MAX_SCALAR_BYTES || (!sym->onStack && !sym->rname[0]))
     return false;
+
+  if (storeAllocatedOperandToSymbol (right, sym, size))
+    return true;
 
   if (sym->onStack)
     {
@@ -1460,6 +1658,9 @@ wideAssignmentTarget (const iCode *ic, const operand *result, const int size)
   if (!IS_ITEMP (result))
     return NULL;
 
+  if (operandIsAllocated (result))
+    return (operand *)result;
+
   if (next && next->op == '=' && !POINTER_SET (next))
     {
       target = IC_RESULT (next);
@@ -1485,6 +1686,64 @@ finishWideAssignment (const iCode *ic, const operand *result, const operand *tar
 }
 
 static bool
+copyToAllocatedOperand (const operand *result, const operand *right, const int size)
+{
+  /* Loading another byte into A would destroy byte 1, so assign it last. */
+  static const int three_byte_order[] = {0, 2, 1};
+  static const int four_byte_order[] = {0, 2, 3, 1};
+  const symbol *destination = OP_SYMBOL_CONST (result);
+
+  right = resolveReqvOperand (right);
+  if (IS_SYMOP (right) && operandIsAllocated (right))
+    {
+      const symbol *source = OP_SYMBOL_CONST (right);
+
+      if (size == 1)
+        {
+          const char *src = byteRegisterName (symbolRegisterByte (source, 0));
+          const char *dst = byteRegisterName (symbolRegisterByte (destination, 0));
+
+          if (!strcmp (src, dst))
+            return true;
+          if (!strcmp (dst, "a"))
+            emit2 ("mov", "a,%s", src);
+          else if (!strcmp (src, "a"))
+            emit2 ("mov", "%s,a", dst);
+          else
+            {
+              emit2 ("mov", "a,%s", src);
+              emit2 ("mov", "%s,a", dst);
+            }
+          clearAResult ();
+          return true;
+        }
+
+      if (size == 2)
+        {
+          const char *src = symbolRegisterPair (source);
+          const char *dst = symbolRegisterPair (destination);
+          if (!src || !dst)
+            return false;
+          movePair (dst, src);
+          return true;
+        }
+
+      /* Wider allocated values have one canonical layout. */
+      if (size <= 4)
+        return true;
+    }
+
+  for (int i = 0; i < size; i++)
+    {
+      const int offset = size == 3 ? three_byte_order[i] : size == 4 ? four_byte_order[i] : i;
+
+      if (!loadOperandByteToA (right, offset) || !storeAToOperandByte (result, offset))
+        return false;
+    }
+  return true;
+}
+
+static bool
 genAssign (const iCode *ic)
 {
   operand *result = IC_RESULT (ic);
@@ -1499,6 +1758,10 @@ genAssign (const iCode *ic)
     {
       symbol *sym = OP_SYMBOL (result);
       const symbol *storage = operandStorageSymbol (result);
+
+      size = k78k0_operandSize (result);
+      if (operandIsAllocated (result))
+        return copyToAllocatedOperand (result, right, size);
 
       if (storage == sym)
         {
@@ -1762,6 +2025,9 @@ genCast (const iCode *ic)
     {
       symbol *sym = OP_SYMBOL (result);
       const symbol *storage = operandStorageSymbol (result);
+
+      if (operandIsAllocated (result))
+        return result_size == right_size && copyToAllocatedOperand (result, right, result_size);
 
       if (storage != sym)
         {
@@ -2555,9 +2821,11 @@ finishCall (const iCode *ic, sym_link *ftype, operand *result, const bool hidden
       if (target)
         {
           const symbol *storage = operandStorageSymbol (target);
-          const bool stored = storage->onStack ?
-            (result_size > 2 ? storeReturnRegistersToStack (storage, result_size) : storeAccumulatorToStack (storage, result_size)) :
-            storeReturnRegistersToDirect (storage, result_size);
+          const bool stored = operandIsAllocated (target) ?
+            storeReturnValueToAllocatedOperand (target, result_size) :
+            storage->onStack ?
+              (result_size > 2 ? storeReturnRegistersToStack (storage, result_size) : storeAccumulatorToStack (storage, result_size)) :
+              storeReturnRegistersToDirect (storage, result_size);
 
           if (stored)
             {
@@ -2724,6 +2992,16 @@ genOperandReturnValue (const operand *op)
   if (IS_SYMOP (op))
     {
       const symbol *sym = operandStorageSymbol (op);
+
+      if (operandIsAllocated (op))
+        {
+          if (size == 1)
+            return loadOperandByteToA (op, 0);
+          if (size == 2)
+            return loadOperandLowWordToAX (op);
+          if (size <= 4)
+            return storeReturnValueToAllocatedOperand (op, size);
+        }
 
       if (operandInReturnValue (op, size))
         return return_result_ax_valid;
@@ -4377,7 +4655,7 @@ gen78K0iCode (iCode *ic)
 }
 
 void
-gen78K0Code (ebbIndex *ebbi)
+gen78K0Code (iCode *ic_head)
 {
   int clevel = 0;
   int cblock = 0;
@@ -4386,42 +4664,37 @@ gen78K0Code (ebbIndex *ebbi)
   if (options.debug && currFunc)
     debugFile->writeFrameAddress (NULL, NULL, 0);
 
-  for (int i = 0; i < ebbi->count; i++)
+  for (iCode *ic = ic_head; ic; ic = ic->next)
     {
-      eBBlock *ebb = ebbi->bbOrder[i];
+      initGenLineElement ();
+      genLine.lineElement.ic = ic;
 
-      for (iCode *ic = ebb->sch; ic; ic = ic->next)
+      if (ic->level != clevel || ic->block != cblock)
         {
-          initGenLineElement ();
-          genLine.lineElement.ic = ic;
-
-          if (ic->level != clevel || ic->block != cblock)
-            {
-              if (options.debug)
-                debugFile->writeScope (ic);
-              clevel = ic->level;
-              cblock = ic->block;
-            }
-
-          if (ic->lineno && cln != ic->lineno)
-            {
-              if (options.debug)
-                debugFile->writeCLine (ic);
-
-              if (!options.noCcodeInAsm)
-                emit2 (";", "%s: %d: %s", ic->filename, ic->lineno, printCLine (ic->filename, ic->lineno));
-              cln = ic->lineno;
-            }
-
-          if (options.iCodeInAsm)
-            {
-              const char *iLine = printILine (ic);
-              emit2 ("; ic:", "%d: %s", ic->key, iLine);
-              dbuf_free (iLine);
-            }
-
-          gen78K0iCode (ic);
+          if (options.debug)
+            debugFile->writeScope (ic);
+          clevel = ic->level;
+          cblock = ic->block;
         }
+
+      if (ic->lineno && cln != ic->lineno)
+        {
+          if (options.debug)
+            debugFile->writeCLine (ic);
+
+          if (!options.noCcodeInAsm)
+            emit2 (";", "%s: %d: %s", ic->filename, ic->lineno, printCLine (ic->filename, ic->lineno));
+          cln = ic->lineno;
+        }
+
+      if (options.iCodeInAsm)
+        {
+          const char *iLine = printILine (ic);
+          emit2 ("; ic:", "%d: %s", ic->key, iLine);
+          dbuf_free (iLine);
+        }
+
+      gen78K0iCode (ic);
     }
 
   if (options.debug)

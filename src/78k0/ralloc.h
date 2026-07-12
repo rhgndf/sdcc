@@ -24,36 +24,6 @@ enum
   K78K0_RB0_B_IDX,
   K78K0_RB0_E_IDX,
   K78K0_RB0_D_IDX,
-  K78K0_RB0_L_IDX,
-  K78K0_RB0_H_IDX,
-
-  K78K0_RB1_X_IDX,
-  K78K0_RB1_A_IDX,
-  K78K0_RB1_C_IDX,
-  K78K0_RB1_B_IDX,
-  K78K0_RB1_E_IDX,
-  K78K0_RB1_D_IDX,
-  K78K0_RB1_L_IDX,
-  K78K0_RB1_H_IDX,
-
-  K78K0_RB2_X_IDX,
-  K78K0_RB2_A_IDX,
-  K78K0_RB2_C_IDX,
-  K78K0_RB2_B_IDX,
-  K78K0_RB2_E_IDX,
-  K78K0_RB2_D_IDX,
-  K78K0_RB2_L_IDX,
-  K78K0_RB2_H_IDX,
-
-  K78K0_RB3_X_IDX,
-  K78K0_RB3_A_IDX,
-  K78K0_RB3_C_IDX,
-  K78K0_RB3_B_IDX,
-  K78K0_RB3_E_IDX,
-  K78K0_RB3_D_IDX,
-  K78K0_RB3_L_IDX,
-  K78K0_RB3_H_IDX,
-
   K78K0_PSW_IDX,
   K78K0_SP_IDX
 };
@@ -73,6 +43,8 @@ typedef struct reg_info
 
 extern reg_info k78k0_regs[];
 
+void k78k0SpillThis (symbol *, bool);
+iCode *k78k0_ralloc2_cc (ebbIndex *);
 void k78k0_assignRegisters (ebbIndex *);
 
 #endif

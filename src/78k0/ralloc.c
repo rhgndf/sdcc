@@ -28,42 +28,12 @@ setRematerializable (operand *result, iCode *remat_ic)
 
 reg_info k78k0_regs[] =
 {
-  {REG_GPR, K78K0_RB0_X_IDX, "rb0x"},
-  {REG_GPR, K78K0_RB0_A_IDX, "rb0a"},
-  {REG_GPR, K78K0_RB0_C_IDX, "rb0c"},
-  {REG_GPR, K78K0_RB0_B_IDX, "rb0b"},
-  {REG_GPR, K78K0_RB0_E_IDX, "rb0e"},
-  {REG_GPR, K78K0_RB0_D_IDX, "rb0d"},
-  {REG_GPR, K78K0_RB0_L_IDX, "rb0l"},
-  {REG_GPR, K78K0_RB0_H_IDX, "rb0h"},
-
-  {REG_GPR, K78K0_RB1_X_IDX, "rb1x"},
-  {REG_GPR, K78K0_RB1_A_IDX, "rb1a"},
-  {REG_GPR, K78K0_RB1_C_IDX, "rb1c"},
-  {REG_GPR, K78K0_RB1_B_IDX, "rb1b"},
-  {REG_GPR, K78K0_RB1_E_IDX, "rb1e"},
-  {REG_GPR, K78K0_RB1_D_IDX, "rb1d"},
-  {REG_GPR, K78K0_RB1_L_IDX, "rb1l"},
-  {REG_GPR, K78K0_RB1_H_IDX, "rb1h"},
-
-  {REG_GPR, K78K0_RB2_X_IDX, "rb2x"},
-  {REG_GPR, K78K0_RB2_A_IDX, "rb2a"},
-  {REG_GPR, K78K0_RB2_C_IDX, "rb2c"},
-  {REG_GPR, K78K0_RB2_B_IDX, "rb2b"},
-  {REG_GPR, K78K0_RB2_E_IDX, "rb2e"},
-  {REG_GPR, K78K0_RB2_D_IDX, "rb2d"},
-  {REG_GPR, K78K0_RB2_L_IDX, "rb2l"},
-  {REG_GPR, K78K0_RB2_H_IDX, "rb2h"},
-
-  {REG_GPR, K78K0_RB3_X_IDX, "rb3x"},
-  {REG_GPR, K78K0_RB3_A_IDX, "rb3a"},
-  {REG_GPR, K78K0_RB3_C_IDX, "rb3c"},
-  {REG_GPR, K78K0_RB3_B_IDX, "rb3b"},
-  {REG_GPR, K78K0_RB3_E_IDX, "rb3e"},
-  {REG_GPR, K78K0_RB3_D_IDX, "rb3d"},
-  {REG_GPR, K78K0_RB3_L_IDX, "rb3l"},
-  {REG_GPR, K78K0_RB3_H_IDX, "rb3h"},
-
+  {REG_GPR, K78K0_RB0_X_IDX, "x"},
+  {REG_GPR, K78K0_RB0_A_IDX, "a"},
+  {REG_GPR, K78K0_RB0_C_IDX, "c"},
+  {REG_GPR, K78K0_RB0_B_IDX, "b"},
+  {REG_GPR, K78K0_RB0_E_IDX, "e"},
+  {REG_GPR, K78K0_RB0_D_IDX, "d"},
   {REG_CND, K78K0_PSW_IDX,   "psw"},
   {0,       K78K0_SP_IDX,    "sp"},
 };
@@ -170,10 +140,20 @@ createSpillSlot (symbol *sym, const int size)
   return slot;
 }
 
-static bool
-callResultNeedsHiddenDestination (const iCode *ic, const symbol *sym, const int size)
+void
+k78k0SpillThis (symbol *sym, bool force_spill)
 {
-  return (ic->op == CALL || ic->op == PCALL) && (IS_STRUCT (sym->type) || size > 4);
+  const int size = getSize (sym->type);
+
+  if (!sym->remat && !sym->usl.spillLoc)
+    sym->usl.spillLoc = createSpillSlot (sym, size);
+
+  sym->isspilt = sym->spillA = 1;
+  sym->stackSpil = !sym->remat;
+
+  if (force_spill)
+    for (int i = 0; i < sym->nRegs; i++)
+      sym->regs[i] = NULL;
 }
 
 static bool
@@ -182,12 +162,68 @@ blockIsReachable (const eBBlock *ebb)
   return !ebb->noPath || ebb->entryLabel == entryLabel || ebb->entryLabel == returnLabel;
 }
 
+static bool
+hasOnlyRegisterMoveUses (const symbol *sym)
+{
+  for (int key = 0; key < sym->uses->size; key++)
+    if (bitVectBitValue (sym->uses, key))
+      {
+        const iCode *ic = hTabItemWithKey (iCodehTab, key);
+
+        if (!ic)
+          return false;
+        if ((ic->op == RETURN || ic->op == SEND) &&
+            IC_LEFT (ic) && IS_SYMOP (IC_LEFT (ic)) && OP_SYMBOL_CONST (IC_LEFT (ic)) == sym)
+          continue;
+        if (ic->op == '=' && !POINTER_SET (ic) && IC_RIGHT (ic) &&
+            IS_SYMOP (IC_RIGHT (ic)) && OP_SYMBOL_CONST (IC_RIGHT (ic)) == sym)
+          continue;
+        return false;
+      }
+
+  return true;
+}
+
+static bool
+hasRegisterSafeDefinitions (const symbol *sym, const int size)
+{
+  bool found = false;
+
+  for (int key = 0; key < sym->defs->size; key++)
+    if (bitVectBitValue (sym->defs, key))
+      {
+        const iCode *ic = hTabItemWithKey (iCodehTab, key);
+
+        found = true;
+        if (!ic || ic->op == RECEIVE)
+          return false;
+        /* Wide arithmetic still uses BC internally; only canonical ABI/copy results are safe. */
+        if (size > 2 && ic->op != CALL && ic->op != PCALL &&
+            (ic->op != '=' || POINTER_SET (ic)))
+          return false;
+      }
+
+  return found;
+}
+
+static bool
+needsSpillStorage (const symbol *sym)
+{
+  /* Hidden destinations are needed even when the call result itself is unused. */
+  return sym->liveTo > sym->liveFrom || sym->nRegs > 4 || IS_STRUCT (sym->type);
+}
+
 void
 k78k0_assignRegisters (ebbIndex *ebbi)
 {
   eBBlock **ebbs = ebbi->bbOrder;
   int count = ebbi->count;
-  symbol *func_sym = NULL;
+  iCode *ic_head;
+  symbol *sym;
+  int key;
+
+  deleteSet (&spill_slots);
+  spill_slot_id = 0;
 
   for (int i = 0; i < count; i++)
     {
@@ -200,59 +236,33 @@ k78k0_assignRegisters (ebbIndex *ebbi)
         markRematerializable (ic);
     }
 
-  for (int i = 0; i < count; i++)
+  for (sym = hTabFirstItem (liveRanges, &key); sym; sym = hTabNextItem (liveRanges, &key))
     {
-      iCode *ic;
+      const int size = getSize (sym->type);
 
-      if (!blockIsReachable (ebbs[i]))
+      sym->for_newralloc = 0;
+      sym->nRegs = 0;
+      if (!sym->isitmp || sym->regType == REG_CND || sym->remat || size < 1)
         continue;
 
-      for (ic = ebbs[i]->sch; ic; ic = ic->next)
-        {
-          operand *result = IC_RESULT (ic);
-          bool hidden_call_result;
-          symbol *sym;
-          int size;
-
-          if (ic->op == FUNCTION && IC_LEFT (ic) && IS_SYMOP (IC_LEFT (ic)))
-            {
-              deleteSet (&spill_slots);
-              func_sym = OP_SYMBOL (IC_LEFT (ic));
-            }
-
-          if (ic->op == ENDFUNCTION)
-            {
-              deleteSet (&spill_slots);
-              func_sym = NULL;
-              continue;
-            }
-
-          if (!result || !IS_ITEMP (result) || POINTER_SET (ic))
-            continue;
-
-          if (!func_sym)
-            continue;
-
-          sym = OP_SYMBOL (result);
-          size = getSize (sym->type);
-          hidden_call_result = callResultNeedsHiddenDestination (ic, sym, size);
-          if (size < 1 || (!hidden_call_result && size > K78K0_MAX_SCALAR_BYTES) ||
-              sym->remat || sym->usl.spillLoc || (!hidden_call_result && sym->liveTo <= ic->seq))
-            continue;
-
-          sym->usl.spillLoc = createSpillSlot (sym, size);
-          sym->isspilt = sym->spillA = 1;
-          sym->stackSpil = 1;
-
-          if (func_sym && currFunc->stack > func_sym->stack)
-            func_sym->stack = currFunc->stack;
-        }
+      sym->nRegs = size;
+      sym->regType = REG_GPR;
+      if (size <= 4 && sym->liveTo > sym->liveFrom &&
+          hasRegisterSafeDefinitions (sym, size) && hasOnlyRegisterMoveUses (sym))
+        sym->for_newralloc = 1;
     }
+
+  ic_head = k78k0_ralloc2_cc (ebbi);
+
+  for (sym = hTabFirstItem (liveRanges, &key); sym; sym = hTabNextItem (liveRanges, &key))
+    if (sym->isitmp && !sym->remat && !sym->isspilt && !sym->regs[0] &&
+        sym->nRegs > 0 && needsSpillStorage (sym))
+      k78k0SpillThis (sym, true);
 
   if (options.dump_i_code)
     dumpEbbsToFileExt (DUMP_RASSGN, ebbi);
 
-  gen78K0Code (ebbi);
+  gen78K0Code (ic_head);
   deleteSet (&spill_slots);
   spill_slot_id = 0;
 }

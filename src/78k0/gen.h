@@ -14,7 +14,7 @@
 
 #include "ralloc.h"
 
-void gen78K0Code (ebbIndex *);
+void gen78K0Code (iCode *);
 void k78k0_emitDebuggerSymbol (const char *);
 
 #endif

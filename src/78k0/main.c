@@ -284,6 +284,9 @@ k78k0_instructionSize (lineNode *line)
   if (k78k0_isInstruction (text, "call") || k78k0_isInstruction (text, "addw") ||
       k78k0_isInstruction (text, "subw") || k78k0_isInstruction (text, "cmpw"))
     return 3;
+  if ((k78k0_isInstruction (text, "bt") || k78k0_isInstruction (text, "bf")) &&
+      tolower ((unsigned char)arg[0]) == 'a' && arg[1] == '.')
+    return 3;
 
   /* Four bytes is the longest encoding. The fallback keeps range checks
      conservative for instructions whose size depends on their operands. */

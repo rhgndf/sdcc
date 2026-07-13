@@ -221,8 +221,6 @@ hasRegisterSafeDefinitions (const symbol *sym, const int size)
 void
 k78k0_assignRegisters (ebbIndex *ebbi)
 {
-  iCode *ic_head;
-  symbol *sym;
   int key;
 
   deleteSet (&spill_slots);
@@ -240,7 +238,7 @@ k78k0_assignRegisters (ebbIndex *ebbi)
         markRematerializable (ic);
     }
 
-  for (sym = hTabFirstItem (liveRanges, &key); sym; sym = hTabNextItem (liveRanges, &key))
+  for (symbol *sym = hTabFirstItem (liveRanges, &key); sym; sym = hTabNextItem (liveRanges, &key))
     {
       const int size = getSize (sym->type);
 
@@ -255,10 +253,10 @@ k78k0_assignRegisters (ebbIndex *ebbi)
                            hasRegisterSafeDefinitions (sym, size) && hasRegisterSafeUses (sym, size);
     }
 
-  ic_head = k78k0_ralloc2_cc (ebbi);
+  iCode *ic_head = k78k0_ralloc2_cc (ebbi);
 
   /* Hidden destinations need storage even when the call result itself is unused. */
-  for (sym = hTabFirstItem (liveRanges, &key); sym; sym = hTabNextItem (liveRanges, &key))
+  for (symbol *sym = hTabFirstItem (liveRanges, &key); sym; sym = hTabNextItem (liveRanges, &key))
     if (sym->isitmp && !sym->remat && !sym->isspilt && !sym->regs[0] &&
         sym->nRegs > 0 && (sym->liveTo > sym->liveFrom || sym->nRegs > 4 || IS_STRUCT (sym->type)))
       k78k0SpillThis (sym, true);

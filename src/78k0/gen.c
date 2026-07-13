@@ -16,25 +16,6 @@
 #define K78K0_PRESERVED_DE_BYTES 2
 #define K78K0_REGISTER_RETURN_BYTES 4
 
-static const symbol *return_result_sym = NULL;
-static int return_result_size = 0;
-static bool hl_is_sp = false;
-static bool hl_sp_offset_valid = false;
-static int hl_sp_offset = 0;
-static int stack_pushed = 0;
-static int local_stack_size = 0;
-static int current_return_size = 0;
-static bool current_return_via_hidden_pointer = false;
-static int current_param_offset = 0;
-static int current_stack_cleanup_size = 0;
-static bool current_function_is_isr = false;
-static unsigned local_label_key = 0;
-static unsigned ic_label_key = 0;
-
-static void genCritical (void);
-static void genEndCritical (void);
-static void emitByteLeftShift (void);
-static void emitByteRightShift (void);
 typedef struct labelMap
 {
   const symbol *symbol;
@@ -43,7 +24,73 @@ typedef struct labelMap
 }
 labelMap;
 
-static labelMap *ic_label_map = NULL;
+static struct
+{
+  struct
+  {
+    int pushed;
+    int local_size;
+    int param_offset;
+  }
+  stack;
+  struct
+  {
+    bool is_sp;
+    bool offset_valid;
+    int sp_offset;
+  }
+  hl;
+  struct
+  {
+    const symbol *symbol;
+    int size;
+  }
+  result;
+  struct
+  {
+    const asmop *return_location;
+    const asmop *argument_location;
+    int return_size;
+    int cleanup_size;
+    bool hidden_return;
+    bool is_isr;
+  }
+  function;
+  struct
+  {
+    unsigned local_key;
+    unsigned ic_key;
+    labelMap *ic_map;
+  }
+  labels;
+}
+G;
+
+#define REG_BYTE(index) (k78k0_regs + (index))
+
+static const asmop asmop_a =
+  {K78K0_AOP_RETURN, 1, NULL, NULL, {REG_BYTE (K78K0_RB0_A_IDX)}};
+static const asmop asmop_ax =
+  {K78K0_AOP_RETURN, 2, NULL, NULL,
+   {REG_BYTE (K78K0_RB0_X_IDX), REG_BYTE (K78K0_RB0_A_IDX)}};
+static const asmop asmop_cax =
+  {K78K0_AOP_RETURN, 3, NULL, NULL,
+   {REG_BYTE (K78K0_RB0_X_IDX), REG_BYTE (K78K0_RB0_A_IDX),
+    REG_BYTE (K78K0_RB0_C_IDX)}};
+static const asmop asmop_bcax =
+  {K78K0_AOP_RETURN, 4, NULL, NULL,
+   {REG_BYTE (K78K0_RB0_X_IDX), REG_BYTE (K78K0_RB0_A_IDX),
+    REG_BYTE (K78K0_RB0_C_IDX), REG_BYTE (K78K0_RB0_B_IDX)}};
+
+#undef REG_BYTE
+
+#define ASMOP_A (&asmop_a)
+#define ASMOP_AX (&asmop_ax)
+
+static void genCritical (void);
+static void genEndCritical (void);
+static void emitByteLeftShift (void);
+static void emitByteRightShift (void);
 
 static void
 emit2 (const char *inst, const char *fmt, ...)
@@ -58,15 +105,15 @@ emit2 (const char *inst, const char *fmt, ...)
 static void
 clearReturnValueState (void)
 {
-  return_result_sym = NULL;
-  return_result_size = 0;
+  G.result.symbol = NULL;
+  G.result.size = 0;
 }
 
 static void
 clearHLState (void)
 {
-  hl_is_sp = false;
-  hl_sp_offset_valid = false;
+  G.hl.is_sp = false;
+  G.hl.offset_valid = false;
 }
 
 static void
@@ -100,6 +147,19 @@ emitSignMaskForA (void);
 static bool
 genWordBinaryOp (const iCode *ic, const char *low_mnemonic, const char *high_mnemonic,
                  bool commutative);
+
+static bool
+genMove_o (const asmop *destination, int destination_offset,
+           const asmop *source, int source_offset, int size);
+
+static bool
+genMove (const asmop *destination, const asmop *source);
+
+static bool
+aopForOperand (asmop *aop, const operand *op);
+
+static const asmop *
+aopReturnForSize (int size);
 
 static const symbol *
 operandStorageSymbol (const operand *op)
@@ -168,25 +228,6 @@ operandHasAllocatedByte (const operand *op)
   return false;
 }
 
-static bool
-symbolUsesReturnLayout (const symbol *sym, const int size)
-{
-  static const int return_registers[] = {
-    K78K0_RB0_X_IDX, K78K0_RB0_A_IDX, K78K0_RB0_C_IDX, K78K0_RB0_B_IDX
-  };
-
-  if (!sym || size < 1 || size > K78K0_REGISTER_RETURN_BYTES)
-    return false;
-
-  for (int offset = 0; offset < size; offset++)
-    {
-      const reg_info *reg = symbolRegisterByte (sym, offset);
-      if (!reg || reg->rIdx != return_registers[offset])
-        return false;
-    }
-  return true;
-}
-
 static const operand *resolveReqvOperand (const operand *op);
 
 static const operand *
@@ -211,60 +252,6 @@ movePair (const char *destination, const char *source)
       emit2 ("movw", "%s,ax", destination);
     }
   clearReturnValueState ();
-}
-
-static bool
-storeReturnValueToAllocatedOperand (const operand *op, const int size)
-{
-  const symbol *sym;
-
-  if (!operandHasAllocatedByte (op) || size < 1 || size > K78K0_REGISTER_RETURN_BYTES)
-    return false;
-
-  sym = OP_SYMBOL_CONST (op);
-  if (size == 1)
-    {
-      const char *destination = byteRegisterName (symbolRegisterByte (sym, 0));
-      if (strcmp (destination, "a"))
-        emit2 ("mov", "%s,a", destination);
-      clearReturnValueState ();
-      return true;
-    }
-
-  if (size == 2)
-    {
-      const char *destination = symbolRegisterPair (sym);
-      if (!destination)
-        return false;
-      movePair (destination, "ax");
-      return true;
-    }
-
-  if (symbolUsesReturnLayout (sym, size))
-    {
-      clearReturnValueState ();
-      return true;
-    }
-
-  emit2 ("movw", "de,ax");
-  emit2 ("mov", "a,c");
-  if (!storeAToOperandByte (op, 2))
-    return false;
-  if (size == 4)
-    {
-      emit2 ("mov", "a,b");
-      if (!storeAToOperandByte (op, 3))
-        return false;
-    }
-  emit2 ("mov", "a,d");
-  if (!storeAToOperandByte (op, 1))
-    return false;
-  emit2 ("mov", "a,e");
-  if (!storeAToOperandByte (op, 0))
-    return false;
-
-  clearReturnValueState ();
-  return true;
 }
 
 static const operand *
@@ -300,13 +287,13 @@ resolveReqvOperand (const operand *op)
 static void
 makeLocalLabel (char *buf, size_t buflen)
 {
-  SNPRINTF (buf, buflen, "L78K0%05u", 60000u + local_label_key++);
+  SNPRINTF (buf, buflen, "L78K0%05u", 60000u + G.labels.local_key++);
 }
 
 static void
 makeICLabel (char *buf, size_t buflen, const symbol *label)
 {
-  for (labelMap *entry = ic_label_map; entry; entry = entry->next)
+  for (labelMap *entry = G.labels.ic_map; entry; entry = entry->next)
     if (entry->symbol == label)
       {
         SNPRINTF (buf, buflen, "L78K0%05u", entry->label);
@@ -316,9 +303,9 @@ makeICLabel (char *buf, size_t buflen, const symbol *label)
   labelMap *entry = Safe_alloc (sizeof (*entry));
 
   entry->symbol = label;
-  entry->label = 20000u + ic_label_key++;
-  entry->next = ic_label_map;
-  ic_label_map = entry;
+  entry->label = 20000u + G.labels.ic_key++;
+  entry->next = G.labels.ic_map;
+  G.labels.ic_map = entry;
 
   SNPRINTF (buf, buflen, "L78K0%05u", entry->label);
 }
@@ -354,23 +341,34 @@ emitCondBranch (const char *inst, const char *label)
 }
 
 static void
+emitABitBranch (const bool branch_if_set, const unsigned bit, const char *label)
+{
+  char skip_label[32];
+
+  makeLocalLabel (skip_label, sizeof (skip_label));
+  emit2 (branch_if_set ? "bf" : "bt", "a.%u,%s", bit, skip_label);
+  emit2 ("br", "!%s", label);
+  emitLocalLabelPreservingHL (skip_label);
+}
+
+static void
 setHLToSP (void)
 {
-  if (hl_is_sp)
+  if (G.hl.is_sp)
     return;
 
   clearRegisterState ();
   emit2 ("movw", "ax,sp");
   emit2 ("movw", "hl,ax");
-  hl_is_sp = true;
-  hl_sp_offset_valid = true;
-  hl_sp_offset = 0;
+  G.hl.is_sp = true;
+  G.hl.offset_valid = true;
+  G.hl.sp_offset = 0;
 }
 
 static void
 ensureHLToSPPreservingA (const char *scratch)
 {
-  if (hl_is_sp)
+  if (G.hl.is_sp)
     return;
 
   emit2 ("mov", "%s,a", scratch);
@@ -381,7 +379,7 @@ ensureHLToSPPreservingA (const char *scratch)
 static void
 ensureHLToSPPreservingAX (void)
 {
-  if (hl_is_sp)
+  if (G.hl.is_sp)
     return;
 
   emit2 ("movw", "de,ax");
@@ -408,13 +406,13 @@ stackByteOffset (const symbol *sym, const int offset)
   int base = sym->stack;
 
   if (!sym->stackSpil && (sym->_isparm || sym->ismyparm) && !IS_REGPARM (sym->etype))
-    base += local_stack_size + current_param_offset;
+    base += G.stack.local_size + G.stack.param_offset;
   else if (sym->stack > 0)
-    base -= local_stack_size + K78K0_RETURN_ADDRESS_BYTES + getSize (sym->type) - 1;
+    base -= G.stack.local_size + K78K0_RETURN_ADDRESS_BYTES + getSize (sym->type) - 1;
   else if (sym->stack < 0)
-    base += local_stack_size;
+    base += G.stack.local_size;
 
-  return base + stack_pushed + offset;
+  return base + G.stack.pushed + offset;
 }
 
 static bool
@@ -449,9 +447,24 @@ setHLToStackOffset (const int stack_offset)
   emit2 ("movw", "ax,sp");
   adjustAX (stack_offset);
   emit2 ("movw", "hl,ax");
-  hl_is_sp = stack_offset == 0;
-  hl_sp_offset_valid = true;
-  hl_sp_offset = stack_offset;
+  G.hl.is_sp = stack_offset == 0;
+  G.hl.offset_valid = true;
+  G.hl.sp_offset = stack_offset;
+}
+
+static void
+setHLToStackOffsetPreservingAX (const int stack_offset)
+{
+  emit2 ("push", "ax");
+  G.stack.pushed += 2;
+  emit2 ("movw", "ax,sp");
+  adjustAX (stack_offset + 2);
+  emit2 ("movw", "hl,ax");
+  emit2 ("pop", "ax");
+  G.stack.pushed -= 2;
+  G.hl.is_sp = stack_offset == 0;
+  G.hl.offset_valid = true;
+  G.hl.sp_offset = stack_offset;
 }
 
 static bool
@@ -463,9 +476,9 @@ prepareStackByteAccess (const symbol *sym, const int offset, const bool preserve
 
   if (!sym->onStack || stack_offset < 0)
     return false;
-  if (hl_sp_offset_valid && stack_offset >= hl_sp_offset)
+  if (G.hl.offset_valid && stack_offset >= G.hl.sp_offset)
     {
-      delta = stack_offset - hl_sp_offset;
+      delta = stack_offset - G.hl.sp_offset;
       if (delta <= 255)
         {
           clearReturnValueState ();
@@ -528,13 +541,59 @@ functionType (sym_link *type)
   return type && IS_FUNCPTR (type) ? type->next : type;
 }
 
+static const asmop *
+aopReturnForSize (const int size)
+{
+  switch (size)
+    {
+    case 1:
+      return &asmop_a;
+    case 2:
+      return &asmop_ax;
+    case 3:
+      return &asmop_cax;
+    case 4:
+      return &asmop_bcax;
+    default:
+      return NULL;
+    }
+}
+
+static const asmop *
+aopRet (sym_link *type)
+{
+  sym_link *ftype = functionType (type);
+
+  if (!ftype || !IS_FUNC (ftype) || !ftype->next || IS_VOID (ftype->next) ||
+      IS_STRUCT (ftype->next))
+    return NULL;
+  return aopReturnForSize (getSize (ftype->next));
+}
+
+static const asmop *
+aopArg (sym_link *type, const int index)
+{
+  sym_link *ftype = functionType (type);
+  value *arg;
+
+  if (!ftype || !IS_FUNC (ftype) || index < 1)
+    return NULL;
+
+  arg = FUNC_ARGS (ftype);
+  for (int current = 1; arg && current < index; current++)
+    arg = arg->next;
+
+  if (!arg || !SPEC_REGPARM (arg->etype) || IS_STRUCT (arg->type))
+    return NULL;
+  return aopReturnForSize (getSize (arg->type));
+}
+
 static bool
 typeReturnsViaHiddenPointer (sym_link *type)
 {
   sym_link *ftype = functionType (type);
 
-  return ftype && ftype->next &&
-         (IS_STRUCT (ftype->next) || getSize (ftype->next) > K78K0_REGISTER_RETURN_BYTES);
+  return ftype && ftype->next && !IS_VOID (ftype->next) && !aopRet (ftype);
 }
 
 static void
@@ -563,9 +622,9 @@ adjustHardwareStackPointer (const int amount, const bool leave_hl_sp)
       if (!ax_is_sp)
         emit2 ("movw", "ax,sp");
       emit2 ("movw", "hl,ax");
-      hl_is_sp = true;
-      hl_sp_offset_valid = true;
-      hl_sp_offset = 0;
+      G.hl.is_sp = true;
+      G.hl.offset_valid = true;
+      G.hl.sp_offset = 0;
     }
 }
 
@@ -577,8 +636,8 @@ adjustStackPointer (const int amount, const bool leave_hl_sp)
 
   adjustHardwareStackPointer (amount, leave_hl_sp);
 
-  stack_pushed -= amount;
-  wassertl (stack_pushed >= 0, "78K0 outgoing stack accounting underflow.");
+  G.stack.pushed -= amount;
+  wassertl (G.stack.pushed >= 0, "78K0 outgoing stack accounting underflow.");
 }
 
 static void
@@ -607,8 +666,8 @@ setAResult (const operand *op)
           return;
         }
 
-      return_result_sym = sym;
-      return_result_size = 1;
+      G.result.symbol = sym;
+      G.result.size = 1;
     }
   else
     clearReturnValueState ();
@@ -646,8 +705,8 @@ setReturnResult (const operand *op, const int size)
           return;
         }
 
-      return_result_sym = sym;
-      return_result_size = 2;
+      G.result.symbol = sym;
+      G.result.size = 2;
     }
   else
     clearReturnValueState ();
@@ -658,14 +717,116 @@ operandInReturnValue (const operand *op, const int size)
 {
   const operand *resolved;
 
-  if (!IS_ITEMP (op) || size != return_result_size)
+  if (!IS_ITEMP (op) || size != G.result.size)
     return false;
 
-  if (OP_SYMBOL_CONST (op) == return_result_sym)
+  if (OP_SYMBOL_CONST (op) == G.result.symbol)
     return true;
 
   resolved = resolveReqvOperand (op);
-  return resolved != op && IS_ITEMP (resolved) && OP_SYMBOL_CONST (resolved) == return_result_sym;
+  return resolved != op && IS_ITEMP (resolved) && OP_SYMBOL_CONST (resolved) == G.result.symbol;
+}
+
+static bool
+aopInReg (const asmop *aop, const int offset, const int reg)
+{
+  return aop && offset >= 0 && offset < aop->size && aop->regs[offset] &&
+         aop->regs[offset]->rIdx == reg;
+}
+
+static const char *
+aopPairName (const asmop *aop, const int offset)
+{
+  if (aopInReg (aop, offset, K78K0_RB0_X_IDX) &&
+      aopInReg (aop, offset + 1, K78K0_RB0_A_IDX))
+    return "ax";
+  if (aopInReg (aop, offset, K78K0_RB0_C_IDX) &&
+      aopInReg (aop, offset + 1, K78K0_RB0_B_IDX))
+    return "bc";
+  if (aopInReg (aop, offset, K78K0_RB0_E_IDX) &&
+      aopInReg (aop, offset + 1, K78K0_RB0_D_IDX))
+    return "de";
+  return NULL;
+}
+
+static bool
+aopUsesReturnRegisters (const asmop *aop, const int size)
+{
+  const asmop *ret = aopReturnForSize (size);
+
+  if (!aop || !ret || aop->size < size)
+    return false;
+  for (int offset = 0; offset < size; offset++)
+    if (!aop->regs[offset] || aop->regs[offset] != ret->regs[offset])
+      return false;
+  return true;
+}
+
+static void
+aopForStorage (asmop *aop, const symbol *sym, const int size)
+{
+  memset (aop, 0, sizeof (*aop));
+  aop->size = size;
+  aop->storage = sym;
+  aop->type = sym && sym->onStack ? K78K0_AOP_STACK :
+              sym && sym->rname[0] ? K78K0_AOP_DIRECT : K78K0_AOP_INVALID;
+}
+
+static bool
+aopForOperand (asmop *aop, const operand *op)
+{
+  memset (aop, 0, sizeof (*aop));
+  if (!op)
+    return false;
+
+  op = resolveCodegenOperand (op);
+  aop->operand = op;
+  aop->size = k78k0_operandSize (op);
+  if (aop->size > K78K0_MAX_SCALAR_BYTES)
+    return false;
+
+  if (IS_OP_LITERAL (op))
+    {
+      aop->type = K78K0_AOP_LITERAL;
+      return true;
+    }
+  if (!IS_SYMOP (op))
+    return false;
+
+  const symbol *sym = OP_SYMBOL_CONST (op);
+  bool in_register = false;
+  for (int offset = 0; offset < aop->size; offset++)
+    if ((aop->regs[offset] = symbolRegisterByte (sym, offset)))
+      in_register = true;
+
+  if (in_register)
+    {
+      aop->type = K78K0_AOP_REGSTK;
+      aop->storage = operandStorageSymbol (op);
+      return true;
+    }
+
+  if (operandInReturnValue (op, aop->size))
+    {
+      const asmop *ret = aopReturnForSize (aop->size);
+
+      wassertl (ret, "invalid 78K0 cached return size");
+      for (int offset = 0; offset < aop->size; offset++)
+        aop->regs[offset] = ret->regs[offset];
+      aop->type = K78K0_AOP_RETURN;
+      return true;
+    }
+
+  aop->storage = operandStorageSymbol (op);
+  if ((IS_ITEMP (op) && sym->remat) || IS_FUNC (operandType (op)))
+    aop->type = K78K0_AOP_IMMEDIATE;
+  else if (aop->storage->onStack)
+    aop->type = K78K0_AOP_STACK;
+  else if (aop->storage->rname[0])
+    aop->type = K78K0_AOP_DIRECT;
+  else
+    aop->type = K78K0_AOP_INVALID;
+  return aop->type != K78K0_AOP_INVALID;
 }
 
 static void
@@ -675,7 +836,7 @@ saveScalarAcrossStackAdjustment (const int size)
     emit2 ("mov", "c,a");
   else if (size == 2)
     emit2 ("movw", "bc,ax");
-  else if (size <= K78K0_REGISTER_RETURN_BYTES)
+  else if (size >= 3 && size <= K78K0_REGISTER_RETURN_BYTES)
     emit2 ("movw", "de,ax");
 }
 
@@ -686,20 +847,22 @@ restoreScalarAcrossStackAdjustment (const int size)
     emit2 ("mov", "a,c");
   else if (size == 2)
     emit2 ("movw", "ax,bc");
-  else if (size <= K78K0_REGISTER_RETURN_BYTES)
+  else if (size >= 3 && size <= K78K0_REGISTER_RETURN_BYTES)
     emit2 ("movw", "ax,de");
 }
 
 static void
 resetFunctionState (void)
 {
-  stack_pushed = 0;
-  local_stack_size = 0;
-  current_return_size = 0;
-  current_return_via_hidden_pointer = false;
-  current_param_offset = 0;
-  current_stack_cleanup_size = 0;
-  current_function_is_isr = false;
+  G.stack.pushed = 0;
+  G.stack.local_size = 0;
+  G.function.return_location = NULL;
+  G.function.argument_location = NULL;
+  G.function.return_size = 0;
+  G.function.hidden_return = false;
+  G.stack.param_offset = 0;
+  G.function.cleanup_size = 0;
+  G.function.is_isr = false;
   clearRegisterState ();
 }
 
@@ -724,11 +887,8 @@ functionStackCleanupBytes (sym_link *ftype)
 static int
 functionFirstRegArgSize (sym_link *ftype)
 {
-  if (!ftype || !IS_FUNC (ftype))
-    return 0;
-
-  value *arg = FUNC_ARGS (ftype);
-  return arg && SPEC_REGPARM (arg->etype) ? getSize (arg->type) : 0;
+  const asmop *arg = aopArg (ftype, 1);
+  return arg ? arg->size : 0;
 }
 
 static void
@@ -790,16 +950,19 @@ genFunction (const iCode *ic)
 {
   const symbol *sym = OP_SYMBOL (IC_LEFT (ic));
   const int frame_local_size = sym->stack > 0 ? sym->stack : 0;
-  const int first_regarg_size = functionFirstRegArgSize (sym->type);
+  const asmop *first_argument = aopArg (sym->type, 1);
+  const int first_regarg_size = first_argument ? first_argument->size : 0;
 
   resetFunctionState ();
-  local_stack_size = frame_local_size + K78K0_PRESERVED_DE_BYTES;
-  current_return_size = sym->type && sym->type->next && !IS_VOID (sym->type->next) ?
+  G.function.return_location = aopRet (sym->type);
+  G.function.argument_location = first_argument;
+  G.stack.local_size = frame_local_size + K78K0_PRESERVED_DE_BYTES;
+  G.function.return_size = sym->type && sym->type->next && !IS_VOID (sym->type->next) ?
     getSize (sym->type->next) : 0;
-  current_return_via_hidden_pointer = typeReturnsViaHiddenPointer (sym->type);
-  current_param_offset = current_return_via_hidden_pointer ? 2 : 0;
-  current_stack_cleanup_size = functionStackCleanupBytes (sym->type);
-  current_function_is_isr = IFFUNC_ISISR (sym->type);
+  G.function.hidden_return = typeReturnsViaHiddenPointer (sym->type);
+  G.stack.param_offset = G.function.hidden_return ? 2 : 0;
+  G.function.cleanup_size = functionStackCleanupBytes (sym->type);
+  G.function.is_isr = IFFUNC_ISISR (sym->type);
   emit2 ("", "%s:", sym->rname);
   genLine.lineCurr->isLabel = 1;
 
@@ -809,7 +972,7 @@ genFunction (const iCode *ic)
       return;
     }
 
-  if (current_function_is_isr)
+  if (G.function.is_isr)
     {
       emit2 ("push", "psw");
       emit2 ("push", "ax");
@@ -866,8 +1029,8 @@ static void
 genEndFunction (const iCode *ic)
 {
   const symbol *sym = OP_SYMBOL (IC_LEFT (ic));
-  const bool is_isr = current_function_is_isr;
-  int frame_local_size;
+  const bool is_isr = G.function.is_isr;
+  const bool register_return = !G.function.hidden_return;
 
   if (IFFUNC_ISNAKED (sym->type))
     {
@@ -879,21 +1042,21 @@ genEndFunction (const iCode *ic)
   if (IFFUNC_ISCRITICAL (sym->type))
     genEndCritical ();
 
-  frame_local_size = local_stack_size - K78K0_PRESERVED_DE_BYTES;
+  const int frame_local_size = G.stack.local_size - K78K0_PRESERVED_DE_BYTES;
   wassertl (frame_local_size >= 0, "78K0 invalid local frame size.");
 
-  if (!is_isr && !current_return_via_hidden_pointer && current_return_size > 2 &&
-      current_return_size <= K78K0_REGISTER_RETURN_BYTES)
+  if (!is_isr && register_return && G.function.return_size > 2 &&
+      G.function.return_size <= K78K0_REGISTER_RETURN_BYTES)
     {
-      emitWideRegisterReturnEpilogue (local_stack_size, current_stack_cleanup_size);
-      wassertl (stack_pushed == 0, "78K0 unbalanced outgoing stack.");
+      emitWideRegisterReturnEpilogue (G.stack.local_size, G.function.cleanup_size);
+      wassertl (G.stack.pushed == 0, "78K0 unbalanced outgoing stack.");
       resetFunctionState ();
       emit2 ("ret", "");
       return;
     }
 
-  if (frame_local_size && !current_return_via_hidden_pointer)
-    saveScalarAcrossStackAdjustment (current_return_size);
+  if (frame_local_size && register_return)
+    saveScalarAcrossStackAdjustment (G.function.return_size);
 
   emit2 ("pop", "de");
   clearHLState ();
@@ -901,24 +1064,25 @@ genEndFunction (const iCode *ic)
   if (frame_local_size)
     {
       adjustHardwareStackPointer (frame_local_size, false);
-      if (!current_return_via_hidden_pointer)
-        restoreScalarAcrossStackAdjustment (current_return_size);
+      if (register_return)
+        restoreScalarAcrossStackAdjustment (G.function.return_size);
     }
 
-  if (current_stack_cleanup_size)
+  if (G.function.cleanup_size)
     {
-      const bool use_pops = !(current_stack_cleanup_size % 2) && current_stack_cleanup_size <= 14 &&
-        (current_return_via_hidden_pointer || current_return_size <= 2);
+      const bool use_pops = !(G.function.cleanup_size % 2) && G.function.cleanup_size <= 14 &&
+        (!register_return || G.function.return_size <= 2);
+      const bool preserve_return = register_return && !use_pops;
 
-      if (!current_return_via_hidden_pointer && !use_pops)
-        saveScalarAcrossStackAdjustment (current_return_size);
+      if (preserve_return)
+        saveScalarAcrossStackAdjustment (G.function.return_size);
 
-      moveReturnAddressForCalleeCleanup (current_stack_cleanup_size, use_pops);
-      if (!current_return_via_hidden_pointer && !use_pops)
-        restoreScalarAcrossStackAdjustment (current_return_size);
+      moveReturnAddressForCalleeCleanup (G.function.cleanup_size, use_pops);
+      if (preserve_return)
+        restoreScalarAcrossStackAdjustment (G.function.return_size);
     }
 
-  wassertl (stack_pushed == 0, "78K0 unbalanced outgoing stack.");
+  wassertl (G.stack.pushed == 0, "78K0 unbalanced outgoing stack.");
   resetFunctionState ();
   if (is_isr)
     {
@@ -930,9 +1094,7 @@ genEndFunction (const iCode *ic)
       emit2 ("reti", "");
     }
   else
-    {
-      emit2 ("ret", "");
-    }
+    emit2 ("ret", "");
 }
 
 static void
@@ -969,7 +1131,7 @@ genCritical (void)
 {
   clearRegisterState ();
   emit2 ("push", "psw");
-  stack_pushed += 1;
+  G.stack.pushed += 1;
   emit2 ("di", "");
 }
 
@@ -978,8 +1140,8 @@ genEndCritical (void)
 {
   clearRegisterState ();
   emit2 ("pop", "psw");
-  stack_pushed -= 1;
-  wassertl (stack_pushed >= 0, "78K0 critical stack accounting underflow.");
+  G.stack.pushed -= 1;
+  wassertl (G.stack.pushed >= 0, "78K0 critical stack accounting underflow.");
 }
 
 static void
@@ -1038,51 +1200,11 @@ loadSymbolByteToA (const symbol *sym, const int offset)
 }
 
 static bool
-loadSymbolToReturnValue (const symbol *sym, const int size)
-{
-  if (size < 1 || size > K78K0_REGISTER_RETURN_BYTES || (!sym->onStack && !sym->rname[0]))
-    return false;
-
-  if (size == 1)
-    return loadSymbolByteToA (sym, 0);
-
-  if (sym->onStack)
-    {
-      const int offset = stackByteOffset (sym, 0);
-
-      if (offset < 0)
-        return false;
-      if (offset + size <= 256)
-        setHLToSP ();
-      else
-        setHLToStackOffset (offset);
-    }
-
-  if (size >= 3)
-    {
-      if (!loadSymbolByteToA (sym, 2))
-        return false;
-      emit2 ("mov", "c,a");
-      if (size == 4)
-        {
-          if (!loadSymbolByteToA (sym, 3))
-            return false;
-          emit2 ("mov", "b,a");
-        }
-    }
-
-  if (!loadSymbolByteToA (sym, 0))
-    return false;
-  emit2 ("mov", "x,a");
-
-  return loadSymbolByteToA (sym, 1);
-}
-
-static bool
 loadOperandLowWordToAX (const operand *op)
 {
-  op = resolveCodegenOperand (op);
+  asmop source;
 
+  op = resolveCodegenOperand (op);
   if (IS_OP_LITERAL (op))
     {
       clearReturnValueState ();
@@ -1090,76 +1212,55 @@ loadOperandLowWordToAX (const operand *op)
       return true;
     }
 
-  if (IS_SYMOP (op))
-    {
-      const symbol *sym = operandStorageSymbol (op);
-      const char *pair = symbolRegisterPair (OP_SYMBOL_CONST (op));
-
-      if (pair)
-        {
-          movePair ("ax", pair);
-          return true;
-        }
-
-      if (loadAddressOperandToAX (op))
-        return true;
-
-      return loadSymbolToReturnValue (sym, 2);
-    }
-
-  return false;
+  if (!aopForOperand (&source, op) || source.size < 2)
+    return false;
+  if (source.type == K78K0_AOP_IMMEDIATE)
+    return loadAddressOperandToAX (source.operand);
+  return genMove_o (ASMOP_AX, 0, &source, 0, 2);
 }
 
 static bool
-loadOperandByteToA (const operand *op, const int offset)
+aopStackByteIndex (const asmop *aop, const int offset, unsigned *index)
 {
-  sym_link *type;
-  int size;
+  if (!aop->storage || !aop->storage->onStack)
+    return false;
 
-  op = resolveCodegenOperand (op);
-  type = operandType (op);
-  size = k78k0_operandSize (op);
+  const int stack_offset = stackByteOffset (aop->storage, offset);
+  if (stack_offset < 0)
+    return false;
+  if (!G.hl.offset_valid || stack_offset < G.hl.sp_offset ||
+      stack_offset - G.hl.sp_offset > 255)
+    setHLToStackOffsetPreservingAX (stack_offset > 255 ? stack_offset & ~0xff : 0);
+  *index = (unsigned)(stack_offset - G.hl.sp_offset);
+  return true;
+}
 
-  if (IS_SYMOP (op))
+static bool
+aopLoadByteToA (const asmop *aop, const int offset)
+{
+  if (!aop || offset < 0)
+    return false;
+
+  if (offset < aop->size && aop->regs[offset])
     {
-      const reg_info *reg = operandRegisterByte (op, offset);
-      if (reg)
-        {
-          const char *source = byteRegisterName (reg);
-          if (strcmp (source, "a"))
-            emit2 ("mov", "a,%s", source);
-          clearReturnValueState ();
-          return true;
-        }
+      const char *source = byteRegisterName (aop->regs[offset]);
+      if (strcmp (source, "a"))
+        emit2 ("mov", "a,%s", source);
+      clearReturnValueState ();
+      return true;
     }
 
-  if (offset == 0 && size == 1 && IS_ITEMP (op) &&
-      OP_SYMBOL_CONST (op) == return_result_sym)
-    return true;
-
-  if (IS_ITEMP (op) && offset < size && operandInReturnValue (op, size))
+  if (aop->type == K78K0_AOP_LITERAL)
     {
-      if (size == 2)
-        {
-          if (offset == 0)
-            emit2 ("mov", "a,x");
-          clearReturnValueState ();
-          return true;
-        }
-      return false;
-    }
-
-  if (IS_OP_LITERAL (op))
-    {
-      const unsigned long long value = operandLitValueBits (op);
+      const unsigned long long value = operandLitValueBits (aop->operand);
       clearReturnValueState ();
       emit2 ("mov", "a,#0x%02x", (unsigned)((value >> (offset * 8)) & 0xffu));
       return true;
     }
 
-  if (offset >= size)
+  if (offset >= aop->size)
     {
-      if (!SPEC_USIGN (getSpec (type)))
+      if (!aop->operand || !SPEC_USIGN (getSpec (operandType (aop->operand))))
         return false;
 
       clearReturnValueState ();
@@ -1167,37 +1268,45 @@ loadOperandByteToA (const operand *op, const int offset)
       return true;
     }
 
-  if (IS_SYMOP (op))
+  if (aop->type == K78K0_AOP_IMMEDIATE)
     {
-      const symbol *sym = operandStorageSymbol (op);
-
-      if (sym == OP_SYMBOL_CONST (op) && size == 2 && offset <= 1 &&
-          loadAddressOperandToAX (op))
-        {
-          if (offset == 0)
-            emit2 ("mov", "a,x");
-          return true;
-        }
-
-      return loadSymbolByteToA (sym, offset);
+      if (aop->size != 2 || offset > 1 || !loadAddressOperandToAX (aop->operand))
+        return false;
+      if (offset == 0)
+        emit2 ("mov", "a,x");
+      return true;
     }
 
-  return false;
+  if (aop->storage && aop->storage->onStack)
+    {
+      unsigned index;
+
+      if (!aopStackByteIndex (aop, offset, &index))
+        return false;
+      clearReturnValueState ();
+      emit2 ("mov", "a,[hl+0x%02x]", index);
+      return true;
+    }
+
+  return aop->storage && loadSymbolByteToA (aop->storage, offset);
+}
+
+static bool
+loadOperandByteToA (const operand *op, const int offset)
+{
+  asmop aop;
+  return aopForOperand (&aop, op) && aopLoadByteToA (&aop, offset);
 }
 
 static bool
 operandByteOnStack (const operand *op, const int offset)
 {
-  const symbol *sym;
+  asmop aop;
 
-  op = resolveCodegenOperand (op);
-  if (!IS_SYMOP (op))
+  if (!aopForOperand (&aop, op) || offset < 0 || offset >= aop.size ||
+      aop.regs[offset] || !aop.storage || !aop.storage->onStack)
     return false;
-  if (operandRegisterByte (op, offset))
-    return false;
-
-  sym = operandStorageSymbol (op);
-  return sym->onStack && stackByteOffset (sym, offset) >= 0;
+  return stackByteOffset (aop.storage, offset) >= 0;
 }
 
 static bool
@@ -1213,24 +1322,26 @@ operandNeedsStackHL (const operand *op, const int size)
 static bool
 operandAccessPreservesCarry (const operand *op, const int size)
 {
-  op = resolveCodegenOperand (op);
-  if (IS_OP_LITERAL (op))
-    return true;
-  if (!IS_SYMOP (op))
-    return false;
+  asmop aop;
 
-  const symbol *sym = operandStorageSymbol (op);
+  if (!aopForOperand (&aop, op))
+    return false;
+  if (aop.type == K78K0_AOP_LITERAL)
+    return true;
+
   for (int offset = 0; offset < size; offset++)
     {
-      if (operandRegisterByte (op, offset))
+      if (offset < aop.size && aop.regs[offset])
         continue;
-      if (sym->onStack)
+      if (!aop.storage)
+        return false;
+      if (aop.storage->onStack)
         {
-          const int stack_offset = stackByteOffset (sym, offset);
+          const int stack_offset = stackByteOffset (aop.storage, offset);
           if (stack_offset >= 0 && stack_offset <= 255)
             continue;
         }
-      else if (sym->rname[0])
+      else if (aop.storage->rname[0])
         continue;
 
       return false;
@@ -1386,164 +1497,227 @@ storeAToSymbolByte (const symbol *sym, const int offset)
 }
 
 static bool
-storeAToOperandByte (const operand *op, const int offset)
+aopStoreByteFromA (const asmop *aop, const int offset)
 {
-  const symbol *sym;
-  const reg_info *reg;
-
-  if (!IS_SYMOP (op))
+  if (!aop || offset < 0 || offset >= aop->size)
     return false;
 
-  reg = operandRegisterByte (op, offset);
-  if (reg)
+  if (aop->regs[offset])
     {
-      const char *destination = byteRegisterName (reg);
+      const char *destination = byteRegisterName (aop->regs[offset]);
       if (strcmp (destination, "a"))
         emit2 ("mov", "%s,a", destination);
       clearReturnValueState ();
       return true;
     }
 
-  sym = operandStorageSymbol (op);
-  return storeAToSymbolByte (sym, offset);
+  if (aop->storage && aop->storage->onStack)
+    {
+      unsigned index;
+
+      if (!aopStackByteIndex (aop, offset, &index))
+        return false;
+      emit2 ("mov", "[hl+0x%02x],a", index);
+      return true;
+    }
+
+  return aop->storage && storeAToSymbolByte (aop->storage, offset);
 }
 
 static bool
-storeSavedAXToSymbol (const symbol *sym)
+aopSameByte (const asmop *left, const int left_offset, const asmop *right, const int right_offset)
 {
-  emit2 ("mov", "a,d");
-  if (!storeAToSymbolByte (sym, 1))
+  if (right_offset >= right->size)
     return false;
 
-  emit2 ("mov", "a,e");
-  return storeAToSymbolByte (sym, 0);
+  const reg_info *left_reg = left->regs[left_offset];
+  const reg_info *right_reg = right->regs[right_offset];
+
+  if (left_reg || right_reg)
+    return left_reg && left_reg == right_reg;
+  return left->storage && left->storage == right->storage && left_offset == right_offset;
+}
+
+static bool
+aopMoveByte (const asmop *destination, const int destination_offset,
+             const asmop *source, const int source_offset)
+{
+  if (aopSameByte (destination, destination_offset, source, source_offset))
+    return true;
+  return aopLoadByteToA (source, source_offset) &&
+         aopStoreByteFromA (destination, destination_offset);
+}
+
+static bool
+genMove_o (const asmop *destination, const int destination_offset,
+           const asmop *source, const int source_offset, const int size)
+{
+  bool pending[K78K0_MAX_SCALAR_BYTES] = {false};
+  bool saved_a = false;
+  int remaining = size;
+
+  if (!destination || !source || size < 0 || size > K78K0_MAX_SCALAR_BYTES ||
+      destination_offset < 0 || source_offset < 0 ||
+      destination_offset + size > destination->size || source_offset >= source->size ||
+      source_offset + size > K78K0_MAX_SCALAR_BYTES)
+    return false;
+
+  if (size >= 2 && destination_offset == 0 && source_offset == 0 &&
+      aopUsesReturnRegisters (source, size) && destination->storage &&
+      destination->storage->onStack)
+    {
+      for (int offset = 0; offset < size; offset++)
+        if (destination->regs[offset])
+          goto general_move;
+
+      emit2 ("movw", "de,ax");
+      setHLToStackOffset (stackByteOffset (destination->storage, 0));
+      if (size >= 3)
+        {
+          emit2 ("mov", "a,c");
+          if (!aopStoreByteFromA (destination, 2))
+            return false;
+          if (size == 4)
+            {
+              emit2 ("mov", "a,b");
+              if (!aopStoreByteFromA (destination, 3))
+                return false;
+            }
+        }
+      emit2 ("mov", "a,d");
+      if (!aopStoreByteFromA (destination, 1))
+        return false;
+      emit2 ("mov", "a,e");
+      if (!aopStoreByteFromA (destination, 0))
+        return false;
+      emit2 ("movw", "ax,de");
+      return true;
+    }
+
+general_move:
+  if (size == 2)
+    {
+      const char *destination_pair = aopPairName (destination, destination_offset);
+      const char *source_pair = aopPairName (source, source_offset);
+
+      if (destination_pair && source_pair)
+        {
+          movePair (destination_pair, source_pair);
+          return true;
+        }
+    }
+
+  for (int i = 0; i < size; i++)
+    pending[i] = true;
+
+  while (remaining)
+    {
+      int selected = -1;
+
+      /* A is the transfer accumulator, so consume a source byte in A first. */
+      for (int i = 0; i < size; i++)
+        if (pending[i] && aopInReg (source, source_offset + i, K78K0_RB0_A_IDX))
+          {
+            if (aopInReg (destination, destination_offset + i, K78K0_RB0_A_IDX) && remaining > 1)
+              {
+                emit2 ("push", "psw");
+                G.stack.pushed++;
+                saved_a = true;
+                pending[i] = false;
+                remaining--;
+                break;
+              }
+            selected = i;
+            break;
+          }
+
+      if (!remaining)
+        break;
+
+      for (int i = 0; selected < 0 && i < size; i++)
+        {
+          const reg_info *destination_reg;
+          bool overwrites_source = false;
+
+          if (!pending[i])
+            continue;
+          destination_reg = destination->regs[destination_offset + i];
+          if (destination_reg && destination_reg->rIdx == K78K0_RB0_A_IDX && remaining > 1)
+            continue;
+
+          for (int j = 0; destination_reg && j < size; j++)
+            if (i != j && pending[j] && source->regs[source_offset + j] == destination_reg)
+              {
+                overwrites_source = true;
+                break;
+              }
+          if (!overwrites_source)
+            selected = i;
+        }
+
+      if (selected < 0 || !aopMoveByte (destination, destination_offset + selected,
+                                        source, source_offset + selected))
+        goto failure;
+      pending[selected] = false;
+      remaining--;
+    }
+
+  if (saved_a)
+    {
+      emit2 ("pop", "psw");
+      G.stack.pushed--;
+      clearHLState ();
+      clearReturnValueState ();
+    }
+  return true;
+
+failure:
+  if (saved_a)
+    {
+      emit2 ("pop", "psw");
+      G.stack.pushed--;
+      clearHLState ();
+    }
+  return false;
+}
+
+static bool
+genMove (const asmop *destination, const asmop *source)
+{
+  return destination && source && genMove_o (destination, 0, source, 0, destination->size);
+}
+
+static bool
+storeAToOperandByte (const operand *op, const int offset)
+{
+  asmop aop;
+  return aopForOperand (&aop, op) && aopStoreByteFromA (&aop, offset);
 }
 
 static bool
 storeReturnRegistersToSymbol (const symbol *sym, const int size)
 {
-  if (!sym || size < 1 || size > K78K0_REGISTER_RETURN_BYTES || (!sym->onStack && !sym->rname[0]))
-    return false;
+  asmop destination;
+  const asmop *source = aopReturnForSize (size);
 
-  if (size == 1)
-    return storeAToSymbolByte (sym, 0);
-
-  emit2 ("movw", "de,ax");
-  if (sym->onStack)
-    {
-      if (size == 2)
-        setHLToSP ();
-      else
-        setHLToStackOffset (stackByteOffset (sym, 0));
-    }
-
-  if (size >= 3)
-    {
-      emit2 ("mov", "a,c");
-      if (!storeAToSymbolByte (sym, 2))
-        return false;
-      if (size == 4)
-        {
-          emit2 ("mov", "a,b");
-          if (!storeAToSymbolByte (sym, 3))
-            return false;
-        }
-    }
-  if (!storeSavedAXToSymbol (sym))
-    return false;
-  emit2 ("movw", "ax,de");
-  return true;
-}
-
-static bool
-storeReturnValueToSymbol (const operand *right, const symbol *sym, const int size)
-{
-  right = resolveReqvOperand (right);
-
-  if (!operandInReturnValue (right, size))
-    return false;
-
-  if (size <= 1)
-    return storeAToSymbolByte (sym, 0);
-
-  if (size != 2)
-    return false;
-
-  if (sym->onStack)
-    {
-      emit2 ("movw", "de,ax");
-      if (!storeSavedAXToSymbol (sym))
-        return false;
-      emit2 ("movw", "ax,de");
-    }
-  else
-    {
-      if (!storeAToSymbolByte (sym, 1))
-        return false;
-      emit2 ("mov", "a,x");
-      if (!storeAToSymbolByte (sym, 0))
-        return false;
-    }
-
-  clearReturnValueState ();
-  return true;
-}
-
-static bool
-storeAllocatedOperandToSymbol (const operand *right, const symbol *sym, const int size)
-{
-  static const int order[] = {1, 0, 2, 3};
-
-  if (!operandHasAllocatedByte (right) || size < 1 || size > K78K0_REGISTER_RETURN_BYTES)
-    return false;
-
-  if (sym->onStack)
-    {
-      if (size == 1)
-        return loadOperandByteToA (right, 0) && storeReturnRegistersToSymbol (sym, 1);
-      if (size == 2)
-        return loadOperandLowWordToAX (right) && storeReturnRegistersToSymbol (sym, 2);
-      return genOperandReturnValue (right) && storeReturnRegistersToSymbol (sym, size);
-    }
-
-  if (size == 1)
-    return loadOperandByteToA (right, 0) && storeAToSymbolByte (sym, 0);
-
-  for (int i = 0; i < size; i++)
-    {
-      const int offset = order[i];
-
-      if (!loadOperandByteToA (right, offset) || !storeAToSymbolByte (sym, offset))
-        return false;
-    }
-  return true;
+  aopForStorage (&destination, sym, size);
+  return source && destination.type != K78K0_AOP_INVALID && genMove (&destination, source);
 }
 
 static bool
 storeOperandToSymbol (const operand *right, const symbol *sym, const int size)
 {
-  if (!sym || size > K78K0_MAX_SCALAR_BYTES || (!sym->onStack && !sym->rname[0]))
-    return false;
+  asmop destination, source;
 
-  if (storeAllocatedOperandToSymbol (right, sym, size) || storeReturnValueToSymbol (right, sym, size))
-    return true;
-
-  for (int offset = 0; offset < size; offset++)
-    {
-      if (!loadOperandByteToA (right, offset) || !storeAToSymbolByte (sym, offset))
-        return false;
-    }
-
-  return true;
+  aopForStorage (&destination, sym, size);
+  return destination.type != K78K0_AOP_INVALID && aopForOperand (&source, right) &&
+         genMove (&destination, &source);
 }
 
 static operand *
 wideAssignmentTarget (const iCode *ic, const operand *result, const int size)
 {
   iCode *next = ic->next;
-  const symbol *storage;
-  operand *target;
-  operand *right;
 
   if (!IS_ITEMP (result))
     return NULL;
@@ -1553,8 +1727,8 @@ wideAssignmentTarget (const iCode *ic, const operand *result, const int size)
 
   if (next && next->op == '=' && !POINTER_SET (next))
     {
-      target = IC_RESULT (next);
-      right = IC_RIGHT (next);
+      operand *target = IC_RESULT (next);
+      operand *right = IC_RIGHT (next);
       if (target && right && IS_SYMOP (target) && IS_ITEMP (right) &&
           OP_SYMBOL_CONST (right) == OP_SYMBOL_CONST (result) &&
           OP_SYMBOL_CONST (result)->liveTo <= next->seq &&
@@ -1562,7 +1736,7 @@ wideAssignmentTarget (const iCode *ic, const operand *result, const int size)
         return target;
     }
 
-  storage = operandStorageSymbol (result);
+  const symbol *storage = operandStorageSymbol (result);
   return storage != OP_SYMBOL_CONST (result) && (storage->onStack || storage->rname[0]) ? (operand *)result : NULL;
 }
 
@@ -1578,58 +1752,10 @@ finishWideAssignment (const iCode *ic, const operand *result, const operand *tar
 static bool
 copyToAllocatedOperand (const operand *result, const operand *right, const int size)
 {
-  /* Loading another byte into A would destroy byte 1, so assign it last. */
-  static const int three_byte_order[] = {0, 2, 1};
-  static const int four_byte_order[] = {0, 2, 3, 1};
-  const symbol *destination = OP_SYMBOL_CONST (result);
+  asmop destination, source;
 
-  right = resolveCodegenOperand (right);
-  if (IS_SYMOP (right) && operandHasAllocatedByte (right))
-    {
-      const symbol *source = OP_SYMBOL_CONST (right);
-
-      if (size == 1)
-        {
-          const char *src = byteRegisterName (symbolRegisterByte (source, 0));
-          const char *dst = byteRegisterName (symbolRegisterByte (destination, 0));
-
-          if (!strcmp (src, dst))
-            return true;
-          if (!strcmp (dst, "a"))
-            emit2 ("mov", "a,%s", src);
-          else if (!strcmp (src, "a"))
-            emit2 ("mov", "%s,a", dst);
-          else
-            {
-              emit2 ("mov", "a,%s", src);
-              emit2 ("mov", "%s,a", dst);
-            }
-          clearReturnValueState ();
-          return true;
-        }
-
-      if (size == 2)
-        {
-          const char *src = symbolRegisterPair (source);
-          const char *dst = symbolRegisterPair (destination);
-          if (!src || !dst)
-            return false;
-          movePair (dst, src);
-          return true;
-        }
-
-      if (symbolUsesReturnLayout (source, size) && symbolUsesReturnLayout (destination, size))
-        return true;
-    }
-
-  for (int i = 0; i < size; i++)
-    {
-      const int offset = size == 3 ? three_byte_order[i] : size == 4 ? four_byte_order[i] : i;
-
-      if (!loadOperandByteToA (right, offset) || !storeAToOperandByte (result, offset))
-        return false;
-    }
-  return true;
+  return aopForOperand (&destination, result) && destination.size == size &&
+         aopForOperand (&source, right) && genMove (&destination, &source);
 }
 
 static bool
@@ -1638,17 +1764,16 @@ genAssign (const iCode *ic)
   operand *result = IC_RESULT (ic);
   operand *right = IC_RIGHT (ic);
   const symbol *rsym;
-  int size;
 
   if (!IS_SYMOP (result) || !right)
     return false;
 
+  const int size = k78k0_operandSize (result);
   if (IS_ITEMP (result))
     {
       symbol *sym = OP_SYMBOL (result);
       const symbol *storage = operandStorageSymbol (result);
 
-      size = k78k0_operandSize (result);
       if (operandHasAllocatedByte (result))
         return copyToAllocatedOperand (result, right, size);
 
@@ -1663,7 +1788,6 @@ genAssign (const iCode *ic)
   else
     rsym = OP_SYMBOL_CONST (result);
 
-  size = k78k0_operandSize (result);
   return storeOperandToSymbol (right, rsym, size);
 }
 
@@ -2012,7 +2136,7 @@ genWideBinaryAccumulatorOp (const iCode *ic, const operand *result, const operan
           if (offset && !direct_carry)
             {
               emit2 ("pop", "psw");
-              stack_pushed--;
+              G.stack.pushed--;
               clearHLState ();
             }
 
@@ -2051,7 +2175,7 @@ genWideBinaryAccumulatorOp (const iCode *ic, const operand *result, const operan
       if (uses_carry && !direct_carry && offset != size - 1)
         {
           emit2 ("push", "psw");
-          stack_pushed++;
+          G.stack.pushed++;
           clearHLState ();
         }
 
@@ -2682,6 +2806,30 @@ genCmpLtGt (const iCode *ic, iCode *ifx)
     {
       const unsigned mask = size == 1 ? 0xffu : 0xffffu;
       unsigned literal = (unsigned)operandLitValueBits (right) & mask;
+      const bool is_sign_test = is_signed && ((!is_gt && literal == 0) || (is_gt && literal == mask));
+
+      if (is_sign_test)
+        {
+          const bool true_when_set = !is_gt;
+
+          if (!loadOperandByteToA (left, size - 1))
+            return false;
+          if (!ifx)
+            {
+              emit2 ("mov1", "cy,a.7");
+              if (!true_when_set)
+                emit2 ("not1", "cy");
+              setBooleanResultFromCarry (result);
+              return true;
+            }
+
+          const bool target_is_true = IC_TRUE (ifx);
+          emitABitBranch (target_is_true == true_when_set, 7,
+                          target_is_true ? true_label : false_label);
+          emit2 ("br", "!%s", target_is_true ? false_label : true_label);
+          finishComparison (result, ifx, true_label, false_label, done_label);
+          return true;
+        }
 
       if (size == 1 ? !loadOperandByteToA (left, 0) : !loadOperandLowWordToAX (left))
         return false;
@@ -2744,17 +2892,14 @@ genCmpLtGt (const iCode *ic, iCode *ifx)
 static bool
 pushBigReturnAddress (const operand *result)
 {
-  const symbol *sym;
-
   if (!result || !IS_SYMOP (result))
     return false;
 
-  sym = operandStorageSymbol (result);
-  if (!loadSymbolAddressToAX (sym, 0))
+  if (!loadSymbolAddressToAX (operandStorageSymbol (result), 0))
     return false;
 
   emit2 ("push", "ax");
-  stack_pushed += 2;
+  G.stack.pushed += 2;
   clearRegisterState ();
   return true;
 }
@@ -2763,23 +2908,22 @@ static bool
 finishCall (const iCode *ic, sym_link *ftype, operand *result, const bool hidden_return)
 {
   const int cleanup_bytes = ic->parmBytes + (hidden_return ? 2 : 0);
+  const asmop *return_location = hidden_return ? NULL : aopRet (ftype);
   int result_size = 0;
-  int return_size = 0;
+  const int return_size = return_location ? return_location->size : 0;
 
   if (!hidden_return)
     {
       if (result && IS_ITEMP (result))
         result_size = k78k0_operandSize (result);
-      if (ftype && IS_FUNC (ftype) && ftype->next && !IS_VOID (ftype->next))
-        return_size = getSize (ftype->next);
     }
 
   if (cleanup_bytes)
     {
       if (ftype && IS_FUNC (ftype) && !FUNC_HASVARARGS (ftype))
         {
-          stack_pushed -= cleanup_bytes;
-          wassertl (stack_pushed >= 0, "78K0 outgoing stack accounting underflow.");
+          G.stack.pushed -= cleanup_bytes;
+          wassertl (G.stack.pushed >= 0, "78K0 outgoing stack accounting underflow.");
         }
       else
         {
@@ -2793,28 +2937,24 @@ finishCall (const iCode *ic, sym_link *ftype, operand *result, const bool hidden
     {
       operand *target;
 
-      if (result_size == 1 && return_size > 1)
-        emit2 ("mov", "a,x");
-
       target = wideAssignmentTarget (ic, result, result_size);
       if (target)
         {
-          const symbol *storage = operandStorageSymbol (target);
-          const bool stored = operandHasAllocatedByte (target) ?
-            storeReturnValueToAllocatedOperand (target, result_size) :
-            storeReturnRegistersToSymbol (storage, result_size);
+          asmop destination;
+          const bool stored = return_location && aopForOperand (&destination, target) &&
+            genMove_o (&destination, 0, return_location, 0, result_size);
 
           if (stored)
-            {
-              if (target != result)
-                ic->next->generated = true;
-              clearReturnValueState ();
-              return true;
-            }
+            return finishWideAssignment (ic, result, target);
         }
 
       if (result_size <= 2)
-        setReturnResult (result, result_size);
+        {
+          if (result_size == 1 && return_size > 1 &&
+              !genMove_o (ASMOP_A, 0, return_location, 0, 1))
+            return false;
+          setReturnResult (result, result_size);
+        }
       else if (IS_ITEMP (result) && OP_SYMBOL_CONST (result)->liveTo <= ic->seq)
         clearReturnValueState ();
       else
@@ -2942,85 +3082,36 @@ genIfx (const iCode *ic)
 }
 
 static bool
-loadOperandToReturnRegisters (const operand *op, const int size)
+genOperandToAop (const operand *op, const asmop *destination)
 {
-  const symbol *sym = OP_SYMBOL_CONST (op);
-
-  if (symbolUsesReturnLayout (sym, size))
-    return true;
-
-  const char *low_pair = symbolRegisterPair (sym);
-  const bool preserve_ax = low_pair && !strcmp (low_pair, "ax");
-
-  if (preserve_ax)
-    {
-      emit2 ("push", "ax");
-      stack_pushed += 2;
-    }
-
-  if (size >= 3)
-    {
-      if (!loadOperandByteToA (op, 2))
-        return false;
-      emit2 ("mov", "c,a");
-      if (size == 4)
-        {
-          if (!loadOperandByteToA (op, 3))
-            return false;
-          emit2 ("mov", "b,a");
-        }
-    }
-
-  if (preserve_ax)
-    {
-      emit2 ("pop", "ax");
-      stack_pushed -= 2;
-      clearHLState ();
-      return true;
-    }
-
-  return loadOperandLowWordToAX (op);
-}
-
-static bool
-genOperandReturnValue (const operand *op)
-{
-  int size;
+  asmop source;
 
   op = resolveCodegenOperand (op);
-  size = k78k0_operandSize (op);
+  const int size = k78k0_operandSize (op);
 
-  if (IS_OP_LITERAL (op))
+  if (!destination || destination->size != size)
+    return false;
+  if (IS_OP_LITERAL (op) && destination == aopReturnForSize (size))
     {
       genLiteralReturnValue (op);
       return true;
     }
 
-  if (IS_SYMOP (op))
+  if (!aopForOperand (&source, op))
+    return false;
+  if (source.type == K78K0_AOP_IMMEDIATE)
     {
-      const symbol *sym = operandStorageSymbol (op);
-
-      if (operandHasAllocatedByte (op))
-        {
-          if (size == 1)
-            return loadOperandByteToA (op, 0);
-          if (size == 2)
-            return loadOperandLowWordToAX (op);
-          if (size <= K78K0_REGISTER_RETURN_BYTES)
-            return loadOperandToReturnRegisters (op, size);
-        }
-
-      if (operandInReturnValue (op, size))
-        return true;
-
-      if (loadAddressOperandToAX (op))
-        return true;
-
-      if (loadSymbolToReturnValue (sym, size))
-        return true;
+      if (size != 2 || !loadAddressOperandToAX (source.operand))
+        return false;
+      return destination == ASMOP_AX || genMove (destination, ASMOP_AX);
     }
+  return genMove (destination, &source);
+}
 
-  return false;
+static bool
+genOperandReturnValue (const operand *op)
+{
+  return genOperandToAop (op, aopReturnForSize (k78k0_operandSize (op)));
 }
 
 static bool
@@ -3401,7 +3492,6 @@ genPointerSet (const iCode *ic)
                  POINTER_SET (ic) ? IC_RESULT (ic) : NULL;
   operand *value = IC_RIGHT (ic);
   sym_link *ptr_type;
-  int size;
 
   if (!ptr || !value)
     return false;
@@ -3410,11 +3500,8 @@ genPointerSet (const iCode *ic)
   if (ptr_type && ptr_type->next && IS_BITFIELD (getSpec (ptr_type->next)))
     return genPointerSetBitField (ptr, value, getSpec (ptr_type->next));
 
-  size = k78k0_operandSize (value);
-  if (!isScalarSize (size))
-    return false;
-
-  if (!savePointerToDE (ptr, 0))
+  const int size = k78k0_operandSize (value);
+  if (!isScalarSize (size) || !savePointerToDE (ptr, 0))
     return false;
 
   for (int offset = 0; offset < size; offset++)
@@ -3590,23 +3677,11 @@ emitVariableShiftLoop (const int size, const bool is_right, const bool is_signed
 static bool
 copyOperandToTarget (const operand *source, const operand *target, const int size)
 {
-  source = resolveCodegenOperand (source);
-  target = resolveCodegenOperand (target);
+  asmop source_aop, target_aop;
 
-  if (IS_SYMOP (source) && IS_SYMOP (target) &&
-      operandStorageSymbol (source) == operandStorageSymbol (target))
-    return true;
-
-  if (operandNeedsStackHL (source, size) || operandNeedsStackHL (target, size))
-    setHLToSP ();
-
-  for (int offset = 0; offset < size; offset++)
-    {
-      if (!loadOperandByteToA (source, offset) || !storeAToOperandByte (target, offset))
-        return false;
-    }
-
-  return true;
+  return aopForOperand (&source_aop, source) &&
+         aopForOperand (&target_aop, target) && target_aop.size == size &&
+         genMove (&target_aop, &source_aop);
 }
 
 static bool
@@ -4230,15 +4305,11 @@ genGetABit (const iCode *ic)
   if (ifx)
     {
       char target_label[32];
-      char skip_label[32];
       const bool branch_if_set = IC_TRUE (ifx) != NULL;
 
       makeICLabel (target_label, sizeof (target_label),
                    branch_if_set ? IC_TRUE (ifx) : IC_FALSE (ifx));
-      makeLocalLabel (skip_label, sizeof (skip_label));
-      emit2 (branch_if_set ? "bf" : "bt", "a.%u,%s", shift, skip_label);
-      emit2 ("br", "!%s", target_label);
-      emitLocalLabelPreservingHL (skip_label);
+      emitABitBranch (branch_if_set, shift, target_label);
       ifx->generated = true;
       return true;
     }
@@ -4350,7 +4421,7 @@ genIpush (const iCode *ic)
         return false;
 
       emit2 ("push", "ax");
-      stack_pushed += 2;
+      G.stack.pushed += 2;
       clearRegisterState ();
       return true;
     }
@@ -4409,43 +4480,40 @@ genPointerIpush (const iCode *ic)
 static bool
 genSend (const iCode *ic)
 {
-  if (ic->argreg != 1)
-    return true;
-
   const operand *left = IC_LEFT (ic);
-  if (!left)
+  const iCode *call;
+
+  if (!left || ic->argreg < 1)
     return false;
 
-  const int size = k78k0_operandSize (left);
-  return size > K78K0_REGISTER_RETURN_BYTES || (size > 0 && genOperandReturnValue (left));
+  for (call = ic->next; call && call->op != CALL && call->op != PCALL; call = call->next)
+    ;
+  if (!call || !IC_LEFT (call))
+    return false;
+
+  const asmop *argument = aopArg (operandType (IC_LEFT (call)), ic->argreg);
+  return argument ? genOperandToAop (left, argument) : true;
 }
 
 static bool
 genReceive (const iCode *ic)
 {
-  if (ic->argreg != 1)
-    return true;
-
   const operand *result = IC_RESULT (ic);
-  if (!result)
-    return false;
+  const asmop *argument = ic->argreg == 1 ? G.function.argument_location : NULL;
+  asmop destination;
 
-  result = resolveCodegenOperand (result);
-  const int size = k78k0_operandSize (result);
-  if (size > K78K0_REGISTER_RETURN_BYTES)
+  if (!argument)
     return true;
-  if (size < 1 || !IS_SYMOP (result))
+  if (!result || !aopForOperand (&destination, result) || destination.size != argument->size)
     return false;
-
-  return operandHasAllocatedByte (result) ? storeReturnValueToAllocatedOperand (result, size) :
-                                       storeReturnRegistersToSymbol (operandStorageSymbol (result), size);
+  return genMove (&destination, argument);
 }
 
 static bool
 copyReturnToHiddenPointer (const operand *left)
 {
   const int size = getSize (operandType (left));
-  const int pointer_offset = local_stack_size + K78K0_RETURN_ADDRESS_BYTES + stack_pushed;
+  const int pointer_offset = G.stack.local_size + K78K0_RETURN_ADDRESS_BYTES + G.stack.pushed;
   const operand *source = resolveReqvOperand (left);
   const symbol *storage = IS_SYMOP (source) ? operandStorageSymbol (source) : NULL;
   char copy_label[32];
@@ -4514,9 +4582,9 @@ genReturn (const iCode *ic)
 {
   char label[32];
 
-  if (IC_LEFT (ic) && (current_return_via_hidden_pointer || current_return_size > 0))
+  if (IC_LEFT (ic) && (G.function.hidden_return || G.function.return_size > 0))
     {
-      if (current_return_via_hidden_pointer)
+      if (G.function.hidden_return)
         {
           if (!copyReturnToHiddenPointer (IC_LEFT (ic)))
             {
@@ -4524,18 +4592,15 @@ genReturn (const iCode *ic)
               return;
             }
         }
-      else if (!genOperandReturnValue (IC_LEFT (ic)))
+      else if (!genOperandToAop (IC_LEFT (ic), G.function.return_location))
         {
           wassertl (0, "78K0 return operand is not implemented yet.");
           return;
         }
     }
 
-  if (!ic->next || ic->next->op != LABEL || IC_LABEL (ic->next) != returnLabel)
-    {
-      makeICLabel (label, sizeof (label), returnLabel);
-      emit2 ("br", "!%s", label);
-    }
+  makeICLabel (label, sizeof (label), returnLabel);
+  emit2 ("br", "!%s", label);
 }
 
 static void

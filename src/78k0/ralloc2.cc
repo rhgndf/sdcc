@@ -33,14 +33,13 @@ static bool
 legal_layout (const std::vector<reg_t> &layout)
 {
   const unsigned size = layout.size ();
-  const bool has_register = std::any_of (layout.begin (), layout.end (), [](reg_t reg) { return reg >= 0; });
-  if (!has_register)
+  if (std::all_of (layout.begin (), layout.end (), [](reg_t reg) { return reg < 0; }))
     return true;
 
   const bool has_spill = std::any_of (layout.begin (), layout.end (), [](reg_t reg) { return reg < 0; });
   if (size <= 2)
     return !has_spill && (size == 1 ? layout[0] >= K78K0_RB0_X_IDX && layout[0] <= K78K0_RB0_D_IDX :
-                          size == 2 && layout[0] % 2 == 0 && layout[1] == layout[0] + 1);
+                          layout[0] % 2 == 0 && layout[1] == layout[0] + 1);
   if (size > 4)
     return false;
   for (unsigned byte = 0; byte < size; byte++)
@@ -63,7 +62,6 @@ instruction_clobbers (const iCode *ic)
     case ENDFUNCTION:
     case GOTO:
     case RETURN:
-      return 0;
     case LABEL:
       return 0;
     case ADDRESS_OF:
@@ -171,14 +169,15 @@ inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
 
   for (const auto &entry : values)
     {
-      const std::vector<reg_t> &layout = entry.second.registers;
+      const value_layout &value = entry.second;
+      const std::vector<reg_t> &layout = value.registers;
       const bool byte_in_register = layout.size () == 1 && layout[0] >= 0;
       const bool byte_in_ax = byte_in_register && layout[0] <= K78K0_RB0_A_IDX;
-      int registers = 0;
+      int used_registers = 0;
 
       for (reg_t reg : layout)
         if (reg >= 0)
-          registers |= 1 << reg;
+          used_registers |= 1 << reg;
 
       if (!legal_layout (layout))
         return false;
@@ -193,7 +192,7 @@ inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
         return false;
 
       const bool overwritten = !POINTER_SET (ic) && operand_is_symbol (IC_RESULT (ic), entry.first);
-      if (entry.second.survives && !overwritten && (registers & clobbers))
+      if (value.survives && !overwritten && (used_registers & clobbers))
         return false;
     }
 
@@ -311,8 +310,9 @@ template <class T_t, class G_t, class I_t>
 static void
 allocate (T_t &T, G_t &G, const I_t &I)
 {
-  con2_t conflicts (boost::num_vertices (I));
-  for (unsigned v = 0; v < boost::num_vertices (I); v++)
+  const unsigned variable_count = boost::num_vertices (I);
+  con2_t conflicts (variable_count);
+  for (unsigned v = 0; v < variable_count; v++)
     {
       conflicts[v].v = I[v].v;
       conflicts[v].byte = I[v].byte;
@@ -329,7 +329,7 @@ allocate (T_t &T, G_t &G, const I_t &I)
   tree_dec_ralloc_nodes (T, root, G, conflicts, context, &optimal);
   const assignment &winner = *T[root].assignments.begin ();
 
-  for (unsigned v = 0; v < boost::num_vertices (I); v++)
+  for (unsigned v = 0; v < variable_count; v++)
     {
       symbol *sym = static_cast<symbol *> (hTabItemWithKey (liveRanges, I[v].v));
       const reg_t reg = winner.global[v];
@@ -337,7 +337,7 @@ allocate (T_t &T, G_t &G, const I_t &I)
       sym->nRegs = I[v].size;
     }
 
-  for (unsigned v = 0; v < boost::num_vertices (I);)
+  for (unsigned v = 0; v < variable_count;)
     {
       symbol *sym = static_cast<symbol *> (hTabItemWithKey (liveRanges, I[v].v));
       const int size = I[v].size;

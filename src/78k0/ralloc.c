@@ -57,43 +57,36 @@ markRematerializable (iCode *ic)
   else if (ic->op == '+' && IS_OP_LITERAL (left) && IS_SYMOP (right) && OP_SYMBOL (right)->remat)
     remat_ic = ic;
 
-  if (remat_ic)
-    {
-      symbol *sym = OP_SYMBOL (result);
-      sym->remat = 1;
-      sym->rematiCode = remat_ic;
-      sym->usl.spillLoc = NULL;
-    }
-}
+  if (!remat_ic)
+    return;
 
-static bool
-spillSlotAvailable (const symbol *slot, const symbol *sym, const int size)
-{
-  if (getSize (slot->type) < size)
-    return false;
-
-  for (symbol *occupant = setFirstItem (slot->usl.itmpStack); occupant;
-       occupant = setNextItem (slot->usl.itmpStack))
-    if (bitVectBitValue (sym->clashes, occupant->key))
-      return false;
-
-  return true;
-}
-
-static symbol *
-findSpillSlot (const symbol *sym, const int size)
-{
-  for (symbol *slot = setFirstItem (spill_slots); slot; slot = setNextItem (spill_slots))
-    if (spillSlotAvailable (slot, sym, size))
-      return slot;
-
-  return NULL;
+  symbol *sym = OP_SYMBOL (result);
+  sym->remat = 1;
+  sym->rematiCode = remat_ic;
+  sym->usl.spillLoc = NULL;
 }
 
 static symbol *
 createSpillSlot (symbol *sym, const int size)
 {
-  symbol *slot = findSpillSlot (sym, size);
+  symbol *slot = NULL;
+
+  for (symbol *candidate = setFirstItem (spill_slots); candidate;
+       candidate = setNextItem (spill_slots))
+    {
+      symbol *occupant;
+      if (getSize (candidate->type) < size)
+        continue;
+      for (occupant = setFirstItem (candidate->usl.itmpStack); occupant;
+           occupant = setNextItem (candidate->usl.itmpStack))
+        if (bitVectBitValue (sym->clashes, occupant->key))
+          break;
+      if (!occupant)
+        {
+          slot = candidate;
+          break;
+        }
+    }
 
   if (!slot)
     {
@@ -107,17 +100,13 @@ createSpillSlot (symbol *sym, const int size)
       slot->type = copyLinkChain (sym->type);
       slot->etype = getSpec (slot->type);
       SPEC_SCLS (slot->etype) = S_AUTO;
-      SPEC_EXTR (slot->etype) = 0;
-      SPEC_STAT (slot->etype) = 0;
-      SPEC_VOLATILE (slot->etype) = 0;
-      slot->_isparm = 0;
-      slot->ismyparm = 0;
+      SPEC_EXTR (slot->etype) = SPEC_STAT (slot->etype) = SPEC_VOLATILE (slot->etype) = 0;
+      slot->_isparm = slot->ismyparm = 0;
 
       wassertl (currFunc, "78K0 iTemp spill outside of a function.");
       allocLocal (slot);
       currFunc->stack += size;
-      slot->isref = 1;
-      slot->stackSpil = 1;
+      slot->isref = slot->stackSpil = 1;
       addSetHead (&spill_slots, slot);
     }
 
@@ -154,35 +143,25 @@ isComparison (const int op)
 }
 
 static bool
-isByteBinaryOperation (const int op)
-{
-  return op == '+' || op == '-' || op == '*' || op == '/' || op == '%' ||
-         op == BITWISEAND || op == '|' || op == '^' || op == LEFT_OP || op == RIGHT_OP ||
-         op == ROT || isComparison (op);
-}
-
-static bool
 isRegisterSafeUse (const iCode *ic, const symbol *sym, const int size)
 {
   const bool uses_left = operandUsesSymbol (IC_LEFT (ic), sym);
   const bool uses_right = operandUsesSymbol (IC_RIGHT (ic), sym);
 
-  if ((ic->op == RETURN || ic->op == SEND) && uses_left)
+  if (uses_left &&
+      (ic->op == RETURN || ic->op == SEND || ic->op == IPUSH || ic->op == '!' ||
+       ic->op == UNARYMINUS || ic->op == GETBYTE || ic->op == GETWORD || ic->op == GETABIT))
     return true;
-  if (ic->op == '=' && !POINTER_SET (ic) && uses_right)
+  if (uses_right && ((ic->op == '=' && !POINTER_SET (ic)) || ic->op == CAST))
     return true;
   if (ic->op == IFX)
     return operandUsesSymbol (IC_COND (ic), sym);
-  if (ic->op == IPUSH)
-    return uses_left;
-  if (ic->op == CAST)
-    return uses_right;
-  if (ic->op == '!' || ic->op == UNARYMINUS || ic->op == GETBYTE ||
-      ic->op == GETWORD || ic->op == GETABIT)
-    return uses_left;
 
   if (size == 1)
-    return isByteBinaryOperation (ic->op) && (uses_left || uses_right);
+    return (uses_left || uses_right) &&
+           (ic->op == '+' || ic->op == '-' || ic->op == '*' || ic->op == '/' || ic->op == '%' ||
+            ic->op == BITWISEAND || ic->op == '|' || ic->op == '^' || ic->op == LEFT_OP ||
+            ic->op == RIGHT_OP || ic->op == ROT || isComparison (ic->op));
 
   if (size != 2)
     return false;
@@ -192,6 +171,11 @@ isRegisterSafeUse (const iCode *ic, const symbol *sym, const int size)
   if (ic->op == '+' || ic->op == '-')
     return (uses_left && IS_OP_LITERAL (IC_RIGHT (ic))) ||
            (ic->op == '+' && IS_OP_LITERAL (IC_LEFT (ic)) && uses_right);
+  if (ic->op == BITWISEAND || ic->op == '|' || ic->op == '^')
+    return uses_left || uses_right;
+  if (ic->op == '*')
+    return (uses_left && IS_OP_LITERAL (IC_RIGHT (ic)) && operandLitValueUll (IC_RIGHT (ic)) <= 255) ||
+           (uses_right && IS_OP_LITERAL (IC_LEFT (ic)) && operandLitValueUll (IC_LEFT (ic)) <= 255);
   if (isComparison (ic->op))
     return uses_left && IS_OP_LITERAL (IC_RIGHT (ic));
   return POINTER_SET (ic) && operandUsesSymbol (IC_RESULT (ic), sym);
@@ -201,13 +185,14 @@ static bool
 hasRegisterSafeUses (const symbol *sym, const int size)
 {
   for (int key = 0; key < sym->uses->size; key++)
-    if (bitVectBitValue (sym->uses, key))
-      {
-        const iCode *ic = hTabItemWithKey (iCodehTab, key);
+    {
+      if (!bitVectBitValue (sym->uses, key))
+        continue;
+      const iCode *ic = hTabItemWithKey (iCodehTab, key);
 
-        if (!ic || !isRegisterSafeUse (ic, sym, size))
-          return false;
-      }
+      if (!ic || !isRegisterSafeUse (ic, sym, size))
+        return false;
+    }
 
   return true;
 }
@@ -218,16 +203,17 @@ hasRegisterSafeDefinitions (const symbol *sym, const int size)
   bool found = false;
 
   for (int key = 0; key < sym->defs->size; key++)
-    if (bitVectBitValue (sym->defs, key))
-      {
-        const iCode *ic = hTabItemWithKey (iCodehTab, key);
+    {
+      if (!bitVectBitValue (sym->defs, key))
+        continue;
+      const iCode *ic = hTabItemWithKey (iCodehTab, key);
 
-        found = true;
-        /* Wide arithmetic still uses BC internally; only canonical ABI/copy results are safe. */
-        if (!ic || (size > 2 && ic->op != CALL && ic->op != PCALL &&
-                    (ic->op != '=' || POINTER_SET (ic))))
-          return false;
-      }
+      found = true;
+      /* Wide arithmetic still uses BC internally; only canonical ABI/copy results are safe. */
+      if (!ic || (size > 2 && ic->op != CALL && ic->op != PCALL &&
+                  (ic->op != '=' || POINTER_SET (ic))))
+        return false;
+    }
 
   return found;
 }

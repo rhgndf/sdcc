@@ -32,26 +32,22 @@ static void add_operand_conflicts_in_node (const cfg_node &, I_t &) {}
 static bool
 legal_layout (const std::vector<reg_t> &layout)
 {
-  if (std::all_of (layout.begin (), layout.end (), [](reg_t reg) { return reg < 0; }))
+  const unsigned size = layout.size ();
+  const bool has_register = std::any_of (layout.begin (), layout.end (), [](reg_t reg) { return reg >= 0; });
+  if (!has_register)
     return true;
 
   const bool has_spill = std::any_of (layout.begin (), layout.end (), [](reg_t reg) { return reg < 0; });
-  if (layout.size () >= 3)
-    {
-      if (layout.size () > 4)
-        return false;
-      for (unsigned byte = 0; byte < layout.size (); byte++)
-        if (layout[byte] >= 0 && layout[byte] != (reg_t)byte)
-          return false;
-      return !has_spill || (layout.size () == 4 &&
-                            (layout[0] < 0) == (layout[1] < 0) &&
-                            (layout[2] < 0) == (layout[3] < 0));
-    }
-
-  if (has_spill)
+  if (size <= 2)
+    return !has_spill && (size == 1 ? layout[0] >= K78K0_RB0_X_IDX && layout[0] <= K78K0_RB0_D_IDX :
+                          size == 2 && layout[0] % 2 == 0 && layout[1] == layout[0] + 1);
+  if (size > 4)
     return false;
-  return layout.size () == 1 ? layout[0] >= K78K0_RB0_X_IDX && layout[0] <= K78K0_RB0_D_IDX :
-         layout.size () == 2 && layout[0] % 2 == 0 && layout[1] == layout[0] + 1;
+  for (unsigned byte = 0; byte < size; byte++)
+    if (layout[byte] >= 0 && layout[byte] != (reg_t)byte)
+      return false;
+  return !has_spill || (size == 4 && (layout[0] < 0) == (layout[1] < 0) &&
+                         (layout[2] < 0) == (layout[3] < 0));
 }
 
 static int
@@ -69,7 +65,7 @@ instruction_clobbers (const iCode *ic)
     case RETURN:
       return 0;
     case LABEL:
-      /* Labels conservatively invalidate the AX value tracked by the allocator. */
+      return 0;
     case ADDRESS_OF:
       return MASK_AX;
     case '=':
@@ -84,17 +80,16 @@ instruction_clobbers (const iCode *ic)
         return MASK_AX | MASK_C;
       return MASK_ALL;
     case '*':
+      return result_size == 1 ? MASK_AX | MASK_C : MASK_ALL;
+    case LEFT_OP:
+    case RIGHT_OP:
+    case ROT:
       return result_size == 1 ? MASK_AX | MASK_BC : MASK_ALL;
     case '/':
     case '%':
     case BITWISEAND:
     case '|':
     case '^':
-      return result_size == 1 ? MASK_AX | MASK_C : MASK_ALL;
-    case LEFT_OP:
-    case RIGHT_OP:
-    case ROT:
-      return result_size == 1 ? MASK_AX | MASK_BC : MASK_ALL;
     case UNARYMINUS:
     case '!':
     case CAST:
@@ -110,9 +105,10 @@ instruction_clobbers (const iCode *ic)
         return MASK_AX;
       return left_size == 1 ? MASK_AX | MASK_C : MASK_ALL;
     case IFX:
-      if (!IC_COND (ic) || getSize (operandType (IC_COND (ic))) > 2)
-        return MASK_ALL;
-      return getSize (operandType (IC_COND (ic))) == 1 ? MASK_AX : MASK_AX | MASK_B;
+      {
+        const int size = IC_COND (ic) ? getSize (operandType (IC_COND (ic))) : 0;
+        return !size || size > 2 ? MASK_ALL : size == 1 ? MASK_AX : MASK_AX | MASK_B;
+      }
     default:
       return MASK_ALL;
     }
@@ -225,8 +221,7 @@ assignment_hopeless (const assignment &a, unsigned short, const G_t &, const I_t
 {
   const int symbol_key = I[lastvar].v;
   std::vector<reg_t> partial (I[lastvar].size, -2);
-  bool has_register = false;
-  bool has_spill = false;
+  bool has_register = false, has_spill = false;
 
   for (var_t v : a.local)
     if (I[v].v == symbol_key)

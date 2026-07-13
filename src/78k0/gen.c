@@ -83,12 +83,6 @@ static bool
 storeAToOperandByte (const operand *op, int offset);
 
 static bool
-symbolIsSfr (const symbol *sym)
-{
-  return sym && sym->etype && SPEC_SCLS (sym->etype) == S_SFR;
-}
-
-static bool
 genOperandReturnValue (const operand *op);
 
 static bool
@@ -102,6 +96,10 @@ loadAddressOperandToAX (const operand *op);
 
 static void
 emitSignMaskForA (void);
+
+static bool
+genWordBinaryOp (const iCode *ic, const char *low_mnemonic, const char *high_mnemonic,
+                 bool commutative);
 
 static const symbol *
 operandStorageSymbol (const operand *op)
@@ -270,21 +268,6 @@ storeReturnValueToAllocatedOperand (const operand *op, const int size)
 }
 
 static const operand *
-operandReqv (const operand *op)
-{
-  const symbol *sym;
-
-  if (!IS_SYMOP (op) || !IS_ITEMP (op))
-    return NULL;
-
-  sym = operandStorageSymbol (op);
-  if (sym != OP_SYMBOL_CONST (op) || !sym->reqv || sym->reqv == op)
-    return NULL;
-
-  return sym->reqv;
-}
-
-static const operand *
 resolveReqvOperand (const operand *op)
 {
   const operand *seen[32];
@@ -293,10 +276,14 @@ resolveReqvOperand (const operand *op)
 
   while (current && seen_count < (int)(sizeof (seen) / sizeof (seen[0])))
     {
-      const operand *next;
+      const symbol *sym;
+      const operand *next = NULL;
 
       seen[seen_count++] = current;
-      next = operandReqv (current);
+      if (IS_SYMOP (current) && IS_ITEMP (current) &&
+          (sym = operandStorageSymbol (current)) == OP_SYMBOL_CONST (current) &&
+          sym->reqv != current)
+        next = sym->reqv;
       if (!next)
         return current;
 
@@ -352,23 +339,16 @@ emitLocalLabelPreservingHL (const char *label)
   genLine.lineCurr->isLabel = 1;
 }
 
-static const char *
-inverseCondBranch (const char *inst)
-{
-  const char *inverse = !strcmp (inst, "bz") ? "bnz" : !strcmp (inst, "bnz") ? "bz" :
-                        !strcmp (inst, "bc") ? "bnc" : !strcmp (inst, "bnc") ? "bc" : NULL;
-
-  wassertl (inverse, "unsupported 78K0 conditional branch");
-  return inverse;
-}
-
 static void
 emitCondBranch (const char *inst, const char *label)
 {
   char skip_label[32];
+  const char *inverse = !strcmp (inst, "bz") ? "bnz" : !strcmp (inst, "bnz") ? "bz" :
+                        !strcmp (inst, "bc") ? "bnc" : !strcmp (inst, "bnc") ? "bc" : NULL;
 
+  wassertl (inverse, "unsupported 78K0 conditional branch");
   makeLocalLabel (skip_label, sizeof (skip_label));
-  emit2 (inverseCondBranch (inst), "%s", skip_label);
+  emit2 (inverse, "%s", skip_label);
   emit2 ("br", "!%s", label);
   emitLocalLabelPreservingHL (skip_label);
 }
@@ -752,13 +732,19 @@ functionFirstRegArgSize (sym_link *ftype)
 }
 
 static void
-moveReturnAddressForCalleeCleanup (const int cleanup_bytes)
+moveReturnAddressForCalleeCleanup (const int cleanup_bytes, const bool use_pops)
 {
   clearRegisterState ();
   emit2 ("pop", "hl");
-  emit2 ("movw", "ax,sp");
-  adjustAX (cleanup_bytes);
-  emit2 ("movw", "sp,ax");
+  if (use_pops)
+    for (int bytes = 0; bytes < cleanup_bytes; bytes += 2)
+      emit2 ("pop", "bc");
+  else
+    {
+      emit2 ("movw", "ax,sp");
+      adjustAX (cleanup_bytes);
+      emit2 ("movw", "sp,ax");
+    }
   emit2 ("push", "hl");
 }
 
@@ -921,11 +907,14 @@ genEndFunction (const iCode *ic)
 
   if (current_stack_cleanup_size)
     {
-      if (!current_return_via_hidden_pointer)
+      const bool use_pops = !(current_stack_cleanup_size % 2) && current_stack_cleanup_size <= 14 &&
+        (current_return_via_hidden_pointer || current_return_size <= 2);
+
+      if (!current_return_via_hidden_pointer && !use_pops)
         saveScalarAcrossStackAdjustment (current_return_size);
 
-      moveReturnAddressForCalleeCleanup (current_stack_cleanup_size);
-      if (!current_return_via_hidden_pointer)
+      moveReturnAddressForCalleeCleanup (current_stack_cleanup_size, use_pops);
+      if (!current_return_via_hidden_pointer && !use_pops)
         restoreScalarAcrossStackAdjustment (current_return_size);
     }
 
@@ -1018,7 +1007,7 @@ genLiteralReturnValue (const operand *op)
 static void
 formatDirectByteAddress (char *address, const size_t size, const symbol *sym, const int offset)
 {
-  const char *prefix = symbolIsSfr (sym) ? "" : "!";
+  const char *prefix = sym->etype && SPEC_SCLS (sym->etype) == S_SFR ? "" : "!";
 
   if (offset)
     SNPRINTF (address, size, "%s%s + %d", prefix, sym->rname, offset);
@@ -1222,6 +1211,35 @@ operandNeedsStackHL (const operand *op, const int size)
 }
 
 static bool
+operandAccessPreservesCarry (const operand *op, const int size)
+{
+  op = resolveCodegenOperand (op);
+  if (IS_OP_LITERAL (op))
+    return true;
+  if (!IS_SYMOP (op))
+    return false;
+
+  const symbol *sym = operandStorageSymbol (op);
+  for (int offset = 0; offset < size; offset++)
+    {
+      if (operandRegisterByte (op, offset))
+        continue;
+      if (sym->onStack)
+        {
+          const int stack_offset = stackByteOffset (sym, offset);
+          if (stack_offset >= 0 && stack_offset <= 255)
+            continue;
+        }
+      else if (sym->rname[0])
+        continue;
+
+      return false;
+    }
+
+  return true;
+}
+
+static bool
 isUnsignedByteSource (const operand *op)
 {
   sym_link *type = operandType (resolveCodegenOperand (op));
@@ -1321,6 +1339,29 @@ aluOperandByteToA (const char *mnemonic, const operand *op, const int offset)
     }
 
   return false;
+}
+
+static bool
+genLiteralBitwiseByteToA (const operand *left, const char *mnemonic, const int offset,
+                          const unsigned value)
+{
+  const bool is_and = !strcmp (mnemonic, "and");
+  const bool is_or = !strcmp (mnemonic, "or");
+
+  if ((is_and && value == 0) || (is_or && value == 0xffu))
+    {
+      emit2 ("mov", "a,#0x%02x", value);
+      return true;
+    }
+
+  if (!loadOperandByteToA (left, offset))
+    return false;
+
+  if ((is_and && value == 0xffu) || (!is_and && value == 0))
+    return true;
+
+  emit2 (mnemonic, "a,#0x%02x", value);
+  return true;
 }
 
 static bool
@@ -1686,6 +1727,15 @@ setBooleanResult (const operand *result)
 }
 
 static void
+setBooleanResultFromCarry (const operand *result)
+{
+  /* MOV preserves CY, so ADDC materializes it as an unsigned byte. */
+  emit2 ("mov", "a,#0x00");
+  emit2 ("addc", "a,#0x00");
+  setBooleanResult (result);
+}
+
+static void
 materializeZeroTest (const operand *result, const bool invert)
 {
   char done_label[32];
@@ -1927,6 +1977,7 @@ genWideBinaryAccumulatorOp (const iCode *ic, const operand *result, const operan
   operand *target = wideAssignmentTarget (ic, result, size);
   const int right_size = k78k0_operandSize (right);
   const bool literal_right = IS_OP_LITERAL (right);
+  bool direct_carry;
 
   if (!target)
     return true;
@@ -1934,6 +1985,9 @@ genWideBinaryAccumulatorOp (const iCode *ic, const operand *result, const operan
     return false;
   if (right_size != size && !literal_right && !SPEC_USIGN (getSpec (operandType (right))))
     return false;
+
+  direct_carry = uses_carry && operandAccessPreservesCarry (left, size) &&
+    operandAccessPreservesCarry (right, right_size) && operandAccessPreservesCarry (target, size);
 
   if (operandNeedsStackHL (left, size) || operandNeedsStackHL (right, size) ||
       operandNeedsStackHL (target, size))
@@ -1955,7 +2009,7 @@ genWideBinaryAccumulatorOp (const iCode *ic, const operand *result, const operan
               emit2 ("mov", "a,c");
             }
 
-          if (offset)
+          if (offset && !direct_carry)
             {
               emit2 ("pop", "psw");
               stack_pushed--;
@@ -1972,20 +2026,29 @@ genWideBinaryAccumulatorOp (const iCode *ic, const operand *result, const operan
         }
       else
         {
-          if (!loadOperandByteToA (left, offset))
-            return false;
+          const char *mnemonic = offset ? high_mnemonic : low_mnemonic;
 
-          if (operandByteOnStack (right, offset))
-            ensureHLToSPPreservingAX ();
-
-          if (!aluOperandByteToA (offset ? high_mnemonic : low_mnemonic, right, offset))
-            return false;
+          if (literal_right)
+            {
+              const unsigned value = (unsigned)(operandLitValueUll (right) >> (offset * 8)) & 0xffu;
+              if (!genLiteralBitwiseByteToA (left, mnemonic, offset, value))
+                return false;
+            }
+          else
+            {
+              if (!loadOperandByteToA (left, offset))
+                return false;
+              if (operandByteOnStack (right, offset))
+                ensureHLToSPPreservingAX ();
+              if (!aluOperandByteToA (mnemonic, right, offset))
+                return false;
+            }
         }
 
       if (offset == size - 1)
         maskUnsignedBitIntTopByteInA (result);
 
-      if (uses_carry && offset != size - 1)
+      if (uses_carry && !direct_carry && offset != size - 1)
         {
           emit2 ("push", "psw");
           stack_pushed++;
@@ -2016,6 +2079,8 @@ genBinaryAccumulatorOp (const iCode *ic, const char *low_mnemonic, const char *h
   size = k78k0_operandSize (result);
   if (!isScalarSize (size))
     return false;
+  if (size == 2 && !uses_carry && genWordBinaryOp (ic, low_mnemonic, high_mnemonic, true))
+    return true;
 
   if (size > 2)
     return genWideBinaryAccumulatorOp (ic, result, left, right, size, low_mnemonic,
@@ -2024,15 +2089,23 @@ genBinaryAccumulatorOp (const iCode *ic, const char *low_mnemonic, const char *h
   if (operandNeedsStackHL (right, size) && !operandNeedsStackHL (left, size))
     setHLToSP ();
 
-  if (!loadOperandByteToA (left, 0))
-    return false;
-
-  if (operandByteOnStack (right, 0))
-    ensureHLToSPPreservingAX ();
+  if (!uses_carry && IS_OP_LITERAL (right))
+    {
+      if (!genLiteralBitwiseByteToA (left, low_mnemonic, 0,
+                                     (unsigned)operandLitValueUll (right) & 0xffu))
+        return false;
+    }
+  else
+    {
+      if (!loadOperandByteToA (left, 0))
+        return false;
+      if (operandByteOnStack (right, 0))
+        ensureHLToSPPreservingAX ();
+    }
 
   if (size == 1 && IS_OP_LITERAL (right) && operandLitValueUll (right) == 1u && uses_carry)
     emit2 (carry_add ? "inc" : "dec", "a");
-  else if (!aluOperandByteToA (low_mnemonic, right, 0))
+  else if ((uses_carry || !IS_OP_LITERAL (right)) && !aluOperandByteToA (low_mnemonic, right, 0))
     return false;
 
   if (size == 1)
@@ -2122,7 +2195,8 @@ loadOperandWordToAX (const operand *op)
 }
 
 static bool
-genWordAddSub (const iCode *ic, const bool subtract)
+genWordBinaryOp (const iCode *ic, const char *low_mnemonic, const char *high_mnemonic,
+                 const bool commutative)
 {
   operand *result = IC_RESULT (ic);
   operand *left = IC_LEFT (ic);
@@ -2134,13 +2208,14 @@ genWordAddSub (const iCode *ic, const bool subtract)
       k78k0_operandSize (right) < 1 || k78k0_operandSize (right) > 2)
     return false;
 
-  if (!subtract && operandUsesPair (left, "bc") && operandUsesPair (right, "de"))
+  if (commutative && (operandUsesPair (left, "bc") || operandUsesPair (right, "de") ||
+                      operandUsesPair (right, "ax")))
     {
       operand *swap = left;
       left = right;
       right = swap;
     }
-  if (operandUsesPair (left, "bc") || operandUsesPair (right, "de"))
+  if (operandUsesPair (left, "bc") || operandUsesPair (right, "de") || operandUsesPair (right, "ax"))
     return false;
 
   if (!loadOperandWordToAX (left))
@@ -2151,10 +2226,10 @@ genWordAddSub (const iCode *ic, const bool subtract)
   emit2 ("movw", "bc,ax");
 
   emit2 ("mov", "a,e");
-  emit2 (subtract ? "sub" : "add", "a,c");
+  emit2 (low_mnemonic, "a,c");
   emit2 ("mov", "x,a");
   emit2 ("mov", "a,d");
-  emit2 (subtract ? "subc" : "addc", "a,b");
+  emit2 (high_mnemonic, "a,b");
 
   maskUnsignedBitIntTopByteInA (result);
   setReturnResult (result, 2);
@@ -2210,7 +2285,7 @@ genAddSub (const iCode *ic, const bool subtract)
   if (genWordLiteralOffset (ic, subtract))
     return true;
 
-  if (genWordAddSub (ic, subtract))
+  if (genWordBinaryOp (ic, subtract ? "sub" : "add", subtract ? "subc" : "addc", !subtract))
     return true;
 
   return genBinaryAccumulatorOp (ic, subtract ? "sub" : "add", subtract ? "subc" : "addc");
@@ -2328,8 +2403,6 @@ genMult (const iCode *ic)
   operand *left = IC_LEFT (ic);
   operand *right = IC_RIGHT (ic);
   operand *word_source = NULL;
-  const reg_info *right_reg;
-  const char *left_scratch;
   unsigned long long literal = 0;
   int size;
 
@@ -2371,20 +2444,41 @@ genMult (const iCode *ic)
   if (!isUnsignedByteSource (left) || !isUnsignedByteSource (right))
     return false;
 
-  right_reg = operandRegisterByte (right, 0);
-  left_scratch = right_reg && right_reg->rIdx == K78K0_RB0_C_IDX ? "b" : "c";
-
   if (operandNeedsStackHL (left, 1) || operandNeedsStackHL (right, 1))
     setHLToSP ();
 
-  if (!loadOperandByteToA (left, 0))
-    return false;
-  emit2 ("mov", "%s,a", left_scratch);
+  if (IS_OP_LITERAL (right))
+    {
+      if (!loadOperandByteToA (left, 0))
+        return false;
+      emit2 ("mov", "x,#0x%02x", (unsigned)operandLitValueUll (right) & 0xffu);
+    }
+  else
+    {
+      const reg_info *left_reg = operandRegisterByte (left, 0);
+      const reg_info *right_reg = operandRegisterByte (right, 0);
+      const bool left_in_c = left_reg && left_reg->rIdx == K78K0_RB0_C_IDX;
+      const bool right_in_c = right_reg && right_reg->rIdx == K78K0_RB0_C_IDX;
 
-  if (!loadOperandByteToA (right, 0))
-    return false;
-  emit2 ("mov", "x,a");
-  emit2 ("mov", "a,%s", left_scratch);
+      if (left_in_c || right_in_c)
+        {
+          if (!loadOperandByteToA (left_in_c ? right : left, 0))
+            return false;
+          emit2 ("mov", "x,a");
+          emit2 ("mov", "a,c");
+        }
+      else
+        {
+          if (!loadOperandByteToA (left, 0))
+            return false;
+          emit2 ("mov", "c,a");
+          if (!loadOperandByteToA (right, 0))
+            return false;
+          emit2 ("mov", "x,a");
+          emit2 ("mov", "a,c");
+        }
+    }
+
   emit2 ("mulu", "x");
 
   if (size == 1)
@@ -2396,43 +2490,29 @@ genMult (const iCode *ic)
 }
 
 static bool
-compareOperandBytes (const operand *left, const operand *right, const int offset)
+compareOperandBytes (const operand *left, const operand *right, const int offset, const bool biased)
 {
+  if (biased)
+    {
+      if (!loadOperandByteToA (right, offset))
+        return false;
+      emit2 ("xor", "a,#0x80");
+      emit2 ("mov", "c,a");
+    }
+
   if (!loadOperandByteToA (left, offset))
     return false;
 
+  if (biased)
+    {
+      emit2 ("xor", "a,#0x80");
+      emit2 ("cmp", "a,c");
+      return true;
+    }
   if (operandByteOnStack (right, offset))
     ensureHLToSPPreservingA ("c");
 
   return aluOperandByteToA ("cmp", right, offset);
-}
-
-static bool
-compareOperandBytesBiased (const operand *left, const operand *right, const int offset)
-{
-  if (!loadOperandByteToA (right, offset))
-    return false;
-
-  emit2 ("xor", "a,#0x80");
-  emit2 ("mov", "c,a");
-
-  if (!loadOperandByteToA (left, offset))
-    return false;
-
-  emit2 ("xor", "a,#0x80");
-  emit2 ("cmp", "a,c");
-  return true;
-}
-
-static void
-genBooleanResult (const operand *result, const char *true_label, const char *done_label)
-{
-  emit2 ("mov", "a,#0x00");
-  emit2 ("br", "%s", done_label);
-  emitLocalLabel (true_label);
-  emit2 ("mov", "a,#0x01");
-  emitLocalLabel (done_label);
-  setBooleanResult (result);
 }
 
 static void
@@ -2464,7 +2544,12 @@ finishComparison (const operand *result, iCode *ifx, const char *true_label, con
   if (!ifx)
     {
       emitLocalLabel (false_label);
-      genBooleanResult (result, true_label, done_label);
+      emit2 ("mov", "a,#0x00");
+      emit2 ("br", "%s", done_label);
+      emitLocalLabel (true_label);
+      emit2 ("mov", "a,#0x01");
+      emitLocalLabel (done_label);
+      setBooleanResult (result);
       return;
     }
 
@@ -2480,6 +2565,16 @@ genNot (const iCode *ic)
 
   if (!IS_ITEMP (result) || !left || k78k0_operandSize (result) < 1 || k78k0_operandSize (result) > 2)
     return false;
+
+  if (k78k0_operandSize (left) == 1)
+    {
+      if (!loadOperandByteToA (left, 0))
+        return false;
+      /* For an unsigned byte, A < 1 is exactly A == 0. */
+      emit2 ("cmp", "a,#0x01");
+      setBooleanResultFromCarry (result);
+      return true;
+    }
 
   if (!testOperandForZero (left))
     return false;
@@ -2509,6 +2604,16 @@ genCmpEqNe (const iCode *ic, iCode *ifx)
 
   prepareComparisonLabels (ifx, true_label, false_label, done_label, sizeof (true_label));
 
+  if (size > 2 && IS_OP_LITERAL (right) && operandLitValueBits (right) == 0)
+    {
+      if (!testOperandForZero (left))
+        return false;
+      emitCondBranch ("bnz", is_ne ? true_label : false_label);
+      emit2 ("br", "!%s", is_ne ? false_label : true_label);
+      finishComparison (result, ifx, true_label, false_label, done_label);
+      return true;
+    }
+
   if (size <= 2 && IS_OP_LITERAL (right))
     {
       const unsigned literal = (unsigned)operandLitValueBits (right);
@@ -2533,7 +2638,7 @@ genCmpEqNe (const iCode *ic, iCode *ifx)
 
   for (int offset = 0; offset < size; offset++)
     {
-      if (!compareOperandBytes (left, right, offset))
+      if (!compareOperandBytes (left, right, offset, false))
         return false;
       emitCondBranch ("bnz", is_ne ? true_label : false_label);
     }
@@ -2589,6 +2694,11 @@ genCmpLtGt (const iCode *ic, iCode *ifx)
         emit2 ("cmp", "a,#0x%02x", literal);
       else
         emit2 ("cmpw", "ax,#0x%04x", literal);
+      if (!ifx && !is_gt)
+        {
+          setBooleanResultFromCarry (result);
+          return true;
+        }
       if (is_gt)
         {
           emitCondBranch ("bc", false_label);
@@ -2608,11 +2718,17 @@ genCmpLtGt (const iCode *ic, iCode *ifx)
     {
       if (is_signed && offset == size - 1)
         {
-          if (!compareOperandBytesBiased (is_gt ? right : left, is_gt ? left : right, offset))
+          if (!compareOperandBytes (is_gt ? right : left, is_gt ? left : right, offset, true))
             return false;
         }
-      else if (!compareOperandBytes (is_gt ? right : left, is_gt ? left : right, offset))
+      else if (!compareOperandBytes (is_gt ? right : left, is_gt ? left : right, offset, false))
         return false;
+
+      if (size == 1 && !ifx)
+        {
+          setBooleanResultFromCarry (result);
+          return true;
+        }
 
       emitCondBranch ("bc", true_label);
       if (offset)
@@ -2960,17 +3076,22 @@ rematerializedAddress (const iCode *ic, const symbol **base, long *offset)
 }
 
 static bool
-loadRematerializedAddressToAX (const operand *op)
+rematerializedOperandAddress (const operand *op, const symbol **base, long *offset)
 {
-  const symbol *base = NULL;
-  const symbol *sym;
-  long offset = 0;
-
   if (!IS_SYMOP (op) || !IS_ITEMP (op))
     return false;
 
-  sym = OP_SYMBOL_CONST (op);
-  return sym->remat && rematerializedAddress (sym->rematiCode, &base, &offset) && base &&
+  const symbol *sym = OP_SYMBOL_CONST (op);
+  return sym->remat && rematerializedAddress (sym->rematiCode, base, offset) && *base;
+}
+
+static bool
+loadRematerializedAddressToAX (const operand *op)
+{
+  const symbol *base = NULL;
+  long offset = 0;
+
+  return rematerializedOperandAddress (op, &base, &offset) &&
          loadSymbolAddressToAX (base, offset);
 }
 
@@ -3020,6 +3141,20 @@ loadUnsignedOperandToAX (const operand *op)
 static bool
 savePointerToDE (const operand *op, const long offset)
 {
+  const symbol *base = NULL;
+  long address_offset = offset;
+
+  if (rematerializedOperandAddress (op, &base, &address_offset) &&
+      !base->onStack && base->rname[0])
+    {
+      clearRegisterState ();
+      if (address_offset)
+        emit2 ("movw", "de,#%s + %ld", base->rname, address_offset);
+      else
+        emit2 ("movw", "de,#%s", base->rname);
+      return true;
+    }
+
   if (k78k0_operandSize (op) != 2 || !genOperandReturnValue (op))
     return false;
 
@@ -3062,19 +3197,6 @@ setHLFromDE (void)
 }
 
 static bool
-savePointerToDEWithOffset (const operand *ptr, long *offset, const unsigned size)
-{
-  if (*offset >= 0 && (unsigned long)*offset + size <= 256u)
-    return savePointerToDE (ptr, 0);
-
-  if (!savePointerToDE (ptr, *offset))
-    return false;
-
-  *offset = 0;
-  return true;
-}
-
-static bool
 genPointerGetBitField (const operand *result, const operand *ptr, long pointer_offset, sym_link *type)
 {
   const int bit_start = SPEC_BSTR (type);
@@ -3085,9 +3207,15 @@ genPointerGetBitField (const operand *result, const operand *ptr, long pointer_o
   const bool keep_pointer_in_hl = !operandNeedsStackHL (result, result_size);
 
   if (bit_start < 0 || bit_start > 7 || bit_length < 1 || bit_length > K78K0_MAX_SCALAR_BYTES * 8 ||
-      !isScalarSize (result_size) ||
-      !savePointerToDEWithOffset (ptr, &pointer_offset, (unsigned)storage_size))
+      !isScalarSize (result_size))
     return false;
+
+  const bool indexed_offset = pointer_offset >= 0 &&
+    (unsigned long)pointer_offset + storage_size <= 256u;
+  if (!savePointerToDE (ptr, indexed_offset ? 0 : pointer_offset))
+    return false;
+  if (!indexed_offset)
+    pointer_offset = 0;
 
   if (keep_pointer_in_hl)
     setHLFromDE ();
@@ -3324,12 +3452,20 @@ genDivMod (const iCode *ic)
   if (operandNeedsStackHL (left, getSize (operandType (left))) || operandNeedsStackHL (right, 1))
     setHLToSP ();
 
-  if (!loadOperandByteToA (right, 0))
-    return false;
-  emit2 ("mov", "c,a");
-
-  if (!loadUnsignedOperandToAX (left))
-    return false;
+  if (IS_OP_LITERAL (right))
+    {
+      if (!loadUnsignedOperandToAX (left))
+        return false;
+      emit2 ("mov", "c,#0x%02x", (unsigned)operandLitValueUll (right) & 0xffu);
+    }
+  else
+    {
+      if (!loadOperandByteToA (right, 0))
+        return false;
+      emit2 ("mov", "c,a");
+      if (!loadUnsignedOperandToAX (left))
+        return false;
+    }
 
   emit2 ("divuw", "c");
 
@@ -3489,15 +3625,6 @@ fillTargetBytesWithA (const operand *target, const int size)
 }
 
 static bool
-clearTargetBytes (const operand *target, const int size)
-{
-  if (operandNeedsStackHL (target, size))
-    setHLToSP ();
-  emit2 ("mov", "a,#0x00");
-  return fillTargetBytesWithA (target, size);
-}
-
-static bool
 shiftTargetLeftOne (const operand *target, const int size)
 {
   emit2 ("clr1", "cy");
@@ -3602,7 +3729,7 @@ shiftTargetByBits (const operand *target, const int size, const bool is_right, c
     {
       makeLocalLabel (loop_label, sizeof (loop_label));
       emit2 ("mov", "b,#0x%02x", count);
-      emitLocalLabel (loop_label);
+      emitLocalLabelPreservingHL (loop_label);
     }
 
   if (!(is_right ? shiftTargetRightOne (target, size, is_signed_right) :
@@ -3647,7 +3774,10 @@ genWideLiteralShift (const iCode *ic, const bool is_right, const bool is_signed_
     {
       if (!is_signed_right)
         {
-          if (!clearTargetBytes (target, size))
+          if (operandNeedsStackHL (target, size))
+            setHLToSP ();
+          emit2 ("mov", "a,#0x00");
+          if (!fillTargetBytesWithA (target, size))
             return false;
         }
       else
@@ -3805,11 +3935,24 @@ genScalarLiteralShift (const operand *result, const operand *left, const int siz
 
   if (size == 1)
     {
+      unsigned rotations;
+      const char *mnemonic;
+
       if (!loadOperandByteToA (left, 0))
         return false;
 
-      while (count--)
-        emitScalarShiftOne (size, is_right, is_signed_right);
+      if (!is_signed_right && count > 1)
+        {
+          emit2 ("and", "a,#0x%02x",
+                 is_right ? (unsigned)(0xffu << count) & 0xffu : 0xffu >> count);
+          rotations = count <= 4 ? (unsigned)count : 8u - (unsigned)count;
+          mnemonic = is_right == (count <= 4) ? "ror" : "rol";
+          while (rotations--)
+            emit2 (mnemonic, "a,1");
+        }
+      else
+        while (count--)
+          emitScalarShiftOne (size, is_right, is_signed_right);
 
       maskUnsignedBitIntTopByteInA (result);
       setReturnResult (result, size);
@@ -3832,10 +3975,7 @@ genScalarLiteralShift (const operand *result, const operand *left, const int siz
       else
         {
           emit2 ("mov", "a,x");
-          emit2 ("mov", "c,a");
-          emit2 ("mov", "a,#0x00");
-          emit2 ("mov", "x,a");
-          emit2 ("mov", "a,c");
+          emit2 ("mov", "x,#0x00");
         }
       count -= 8;
     }
@@ -3886,6 +4026,97 @@ emitByteRotate (const char *mnemonic, unsigned count)
 }
 
 static bool
+genWideRot (const iCode *ic, const unsigned original_count)
+{
+  static const unsigned char copy_order[4] = {0, 2, 3, 1};
+  operand *result = IC_RESULT (ic);
+  const operand *left = resolveCodegenOperand (IC_LEFT (ic));
+  operand *target;
+  const int size = k78k0_operandSize (result);
+  const unsigned bits = size * 8u;
+  unsigned count = original_count % bits;
+  bool rotate_right = count > bits / 2u;
+
+  if ((size != 2 && size != 4) || k78k0_operandSize (left) != size)
+    return false;
+
+  target = wideAssignmentTarget (ic, result, size);
+  if (!target)
+    return true;
+  if (!count)
+    return copyOperandToTarget (left, target, size) && finishWideAssignment (ic, result, target);
+
+  if (rotate_right)
+    count = bits - count;
+  const unsigned byte_count = count / 8u;
+  const unsigned residual = count % 8u;
+  const bool saved_ax = operandUsesPair (left, "ax");
+  if (saved_ax)
+    emit2 ("movw", "de,ax");
+
+  adjustStackPointer (-size, true);
+
+  for (int offset = 0; offset < size; offset++)
+    {
+      const int source_offset = rotate_right ? (offset + byte_count) % size :
+        (offset + size - byte_count) % size;
+      const reg_info *reg = saved_ax ? operandRegisterByte (left, source_offset) : NULL;
+
+      if (reg && reg->rIdx <= K78K0_RB0_A_IDX)
+        emit2 ("mov", "a,%s", reg->rIdx == K78K0_RB0_X_IDX ? "e" : "d");
+      else if (!loadOperandByteToA (left, source_offset))
+        return false;
+      ensureHLToSPPreservingA ("c");
+      emit2 ("mov", "[hl+0x%02x],a", offset);
+    }
+
+  if (residual)
+    {
+      char loop_label[32];
+
+      if (residual > 1)
+        {
+          makeLocalLabel (loop_label, sizeof (loop_label));
+          emit2 ("mov", "b,#0x%02x", residual);
+          emitLocalLabelPreservingHL (loop_label);
+        }
+
+      setHLToSP ();
+      emit2 ("mov", "a,[hl+0x%02x]", rotate_right ? 0 : size - 1);
+      emit2 ("mov1", "cy,a.%u", rotate_right ? 0 : 7);
+      for (int i = 0; i < size; i++)
+        {
+          const int offset = rotate_right ? size - 1 - i : i;
+          emit2 ("mov", "a,[hl+0x%02x]", offset);
+          emit2 (rotate_right ? "rorc" : "rolc", "a,1");
+          emit2 ("mov", "[hl+0x%02x],a", offset);
+        }
+
+      if (residual > 1)
+        emit2 ("dbnz", "b,%s", loop_label);
+    }
+
+  for (int i = 0; i < size; i++)
+    {
+      const int offset = size == 4 ? copy_order[i] : i;
+
+      setHLToSP ();
+      emit2 ("mov", "a,[hl+0x%02x]", offset);
+      if (!storeAToOperandByte (target, offset))
+        return false;
+    }
+
+  const bool target_uses_ax = operandUsesPair (target, "ax");
+  if (target_uses_ax)
+    emit2 ("movw", "de,ax");
+  adjustStackPointer (size, false);
+  if (target_uses_ax)
+    emit2 ("movw", "ax,de");
+
+  return finishWideAssignment (ic, result, target);
+}
+
+static bool
 genRot (const iCode *ic)
 {
   operand *result = IC_RESULT (ic);
@@ -3894,10 +4125,22 @@ genRot (const iCode *ic)
   unsigned count;
 
   if (!IS_ITEMP (result) || !left || !IS_OP_LITERAL (right) ||
-      bitsForType (operandType (left)) != 8 || k78k0_operandSize (result) != 1)
+      bitsForType (operandType (left)) != bitsForType (operandType (result)))
     return false;
 
-  count = (unsigned)(operandLitValueUll (right) % 8u);
+  count = (unsigned)operandLitValueUll (right);
+  if (k78k0_operandSize (result) == 2 && count % 16u == 8u)
+    {
+      if (!genOperandReturnValue (left))
+        return false;
+      emit2 ("xch", "a,x");
+      setReturnResult (result, 2);
+      return true;
+    }
+  if (k78k0_operandSize (result) != 1)
+    return genWideRot (ic, count);
+
+  count %= 8u;
   if (!loadOperandByteToA (left, 0))
     return false;
 
@@ -3969,6 +4212,7 @@ genGetABit (const iCode *ic)
   operand *result = IC_RESULT (ic);
   operand *left = IC_LEFT (ic);
   operand *right = IC_RIGHT (ic);
+  iCode *ifx;
   unsigned long long bit_offset;
 
   if (!IS_ITEMP (result) || !left || !IS_OP_LITERAL (right) || k78k0_operandSize (result) != 1)
@@ -3982,6 +4226,23 @@ genGetABit (const iCode *ic)
     return false;
 
   unsigned shift = (unsigned)(bit_offset % 8ull);
+  ifx = ifxForOp (result, (iCode *)ic);
+  if (ifx)
+    {
+      char target_label[32];
+      char skip_label[32];
+      const bool branch_if_set = IC_TRUE (ifx) != NULL;
+
+      makeICLabel (target_label, sizeof (target_label),
+                   branch_if_set ? IC_TRUE (ifx) : IC_FALSE (ifx));
+      makeLocalLabel (skip_label, sizeof (skip_label));
+      emit2 (branch_if_set ? "bf" : "bt", "a.%u,%s", shift, skip_label);
+      emit2 ("br", "!%s", target_label);
+      emitLocalLabelPreservingHL (skip_label);
+      ifx->generated = true;
+      return true;
+    }
+
   if (shift <= 4)
     emitByteRotate ("ror", shift);
   else

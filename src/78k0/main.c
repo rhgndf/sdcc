@@ -235,10 +235,20 @@ k78k0_dwarfRegNum (const struct reg_info *reg)
   return reg->rIdx;
 }
 
+static bool
+k78k0_isInstruction (const char *text, const char *mnemonic)
+{
+  const size_t length = strlen (mnemonic);
+
+  return !STRNCASECMP (text, mnemonic, length) &&
+         (!text[length] || isspace ((unsigned char)text[length]));
+}
+
 static int
 k78k0_instructionSize (lineNode *line)
 {
   const char *text = line->line;
+  const char *arg;
 
   while (isspace ((unsigned char)*text))
     text++;
@@ -248,8 +258,35 @@ k78k0_instructionSize (lineNode *line)
   if (*text == '.')
     return 999;
 
-  /* Four bytes is the longest 78K0 instruction. Overestimating shorter
-     forms keeps labelInRange conservative without duplicating the assembler. */
+  arg = text;
+  while (*arg && !isspace ((unsigned char)*arg))
+    arg++;
+  while (isspace ((unsigned char)*arg))
+    arg++;
+
+  if (k78k0_isInstruction (text, "ret") || k78k0_isInstruction (text, "retb") ||
+      k78k0_isInstruction (text, "reti") || k78k0_isInstruction (text, "brk") ||
+      k78k0_isInstruction (text, "nop") || k78k0_isInstruction (text, "push") ||
+      k78k0_isInstruction (text, "pop") || k78k0_isInstruction (text, "incw") ||
+      k78k0_isInstruction (text, "decw") || k78k0_isInstruction (text, "xchw") ||
+      k78k0_isInstruction (text, "rol") || k78k0_isInstruction (text, "rolc") ||
+      k78k0_isInstruction (text, "ror") || k78k0_isInstruction (text, "rorc"))
+    return 1;
+  if (k78k0_isInstruction (text, "bc") || k78k0_isInstruction (text, "bnc") ||
+      k78k0_isInstruction (text, "bz") || k78k0_isInstruction (text, "bnz") ||
+      k78k0_isInstruction (text, "mulu") || k78k0_isInstruction (text, "divuw"))
+    return 2;
+  if (k78k0_isInstruction (text, "br"))
+    return *arg == '!' ? 3 : 2;
+  if (k78k0_isInstruction (text, "dbnz"))
+    return (tolower ((unsigned char)*arg) == 'b' || tolower ((unsigned char)*arg) == 'c') &&
+           arg[1] == ',' ? 2 : 3;
+  if (k78k0_isInstruction (text, "call") || k78k0_isInstruction (text, "addw") ||
+      k78k0_isInstruction (text, "subw") || k78k0_isInstruction (text, "cmpw"))
+    return 3;
+
+  /* Four bytes is the longest encoding. The fallback keeps range checks
+     conservative for instructions whose size depends on their operands. */
   return 4;
 }
 
@@ -313,7 +350,7 @@ k78k0_hasExtBitOp (int op, sym_link *left, int right)
     case GETWORD:
       return right >= 0 && !(right % 8) && right / 8 + 2 <= size;
     case ROT:
-      return bitsForType (left) == 8;
+      return bitsForType (left) == 8 || bitsForType (left) == 16 || bitsForType (left) == 32;
     default:
       return false;
     }

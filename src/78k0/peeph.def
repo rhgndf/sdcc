@@ -32,106 +32,98 @@ replace restart {
 // Remove the second half of register round-trips. MOV and MOVW do not alter flags.
 
 replace {
-	mov	a,x
-	mov	x,a
+	mov	a,%1
+	mov	%1,a
 } by {
-	mov	a,x
-}
+	mov	a,%1
+} if same(%1 'x' 'b' 'c' 'd' 'e')
 
 replace {
-	mov	x,a
-	mov	a,x
+	mov	%1,a
+	mov	a,%1
 } by {
-	mov	x,a
-}
+	mov	%1,a
+} if same(%1 'x' 'b' 'c' 'd' 'e')
 
 replace {
-	mov	a,b
-	mov	b,a
+	movw	ax,%1
+	movw	%1,ax
 } by {
-	mov	a,b
-}
+	movw	ax,%1
+} if same(%1 'bc' 'de' 'hl')
 
 replace {
-	mov	b,a
-	mov	a,b
+	movw	%1,ax
+	movw	ax,%1
 } by {
-	mov	b,a
-}
+	movw	%1,ax
+} if same(%1 'bc' 'de' 'hl')
 
-replace {
-	mov	a,c
-	mov	c,a
-} by {
-	mov	a,c
-}
+// MOVW copies the high byte to both A and D in either direction.
 
-replace {
-	mov	c,a
-	mov	a,c
-} by {
-	mov	c,a
-}
-
-replace {
-	movw	ax,bc
-	movw	bc,ax
-} by {
-	movw	ax,bc
-}
-
-replace {
-	movw	bc,ax
-	movw	ax,bc
-} by {
-	movw	bc,ax
-}
-
-replace {
-	movw	ax,de
+replace restart {
 	movw	de,ax
-} by {
-	movw	ax,de
-}
-
-replace {
-	movw	de,ax
-	movw	ax,de
+	mov	a,d
 } by {
 	movw	de,ax
 }
 
-replace {
-	movw	ax,hl
-	movw	hl,ax
+replace restart {
+	movw	ax,de
+	mov	a,d
 } by {
-	movw	ax,hl
+	movw	ax,de
 }
 
-replace {
-	movw	hl,ax
-	movw	ax,hl
+replace restart {
+	xch	a,%1
+	xch	a,%1
 } by {
-	movw	hl,ax
-}
+} if same(%1 'x' 'b' 'c' 'd' 'e')
 
-// MOV and MOVW do not alter flags, so repeated loads of the same register or
-// immediate value have no observable effect. Restrict operands to registers
-// here: repeating a volatile memory read must not be removed.
+// INC and DEC accept every byte register and MOV preserves their flags.
+
+replace restart {
+	mov	a,%1
+	inc	a
+	mov	%1,a
+} by {
+	inc	%1
+	mov	a,%1
+} if same(%1 'x' 'b' 'c' 'd' 'e')
+
+replace restart {
+	mov	a,%1
+	dec	a
+	mov	%1,a
+} by {
+	dec	%1
+	mov	a,%1
+} if same(%1 'x' 'b' 'c' 'd' 'e')
+
+// MOV and MOVW do not alter flags, so repeated safe loads have no observable
+// effect. Keep memory operands behind the volatility check.
 
 replace restart {
 	mov	%1,%2
 	mov	%1,%2
 } by {
 	mov	%1,%2
-} if same(%1 'a' 'x' 'b' 'c'), same(%2 'a' 'x' 'b' 'c')
+} if same(%1 'a' 'x' 'b' 'c' 'd' 'e'), same(%2 'a' 'x' 'b' 'c' 'd' 'e')
+
+replace restart {
+	mov	a,%1
+	mov	a,%1
+} by {
+	mov	a,%1
+} if notVolatile
 
 replace restart {
 	mov	%1,#%2
 	mov	%1,#%2
 } by {
 	mov	%1,#%2
-} if same(%1 'a' 'x' 'b' 'c')
+} if same(%1 'a' 'x' 'b' 'c' 'd' 'e')
 
 replace restart {
 	movw	%1,%2

@@ -24,23 +24,16 @@ static constexpr reg_t unknown_register = -2;
 
 struct register_layout
 {
-  register_layout (unsigned size, reg_t initial) : size (size)
-  {
-    bytes[0] = bytes[1] = initial;
-  }
-
   reg_t bytes[2];
-  unsigned size;
+  int size;
 };
 
 static bool
 layout_completable (const register_layout &layout)
 {
   if (layout.size == 1)
-    return layout.bytes[0] == unknown_register ||
-      layout.bytes[0] == spilled_register ||
-      (layout.bytes[0] >= K78K0_RB0_X_IDX &&
-       layout.bytes[0] <= K78K0_RB0_H_IDX);
+    return layout.bytes[0] >= unknown_register &&
+      layout.bytes[0] <= K78K0_RB0_H_IDX;
   if (layout.size != 2)
     return false;
 
@@ -110,7 +103,8 @@ operand_sane (const operand *op, unsigned forbidden, const assignment &a,
   if (range.first == range.second)
     return true;
 
-  register_layout layout (I[range.first->second].size, spilled_register);
+  register_layout layout =
+    {{spilled_register, spilled_register}, I[range.first->second].size};
   unsigned registers = 0;
   for (auto entry = range.first; entry != range.second; ++entry)
     {
@@ -124,21 +118,6 @@ operand_sane (const operand *op, unsigned forbidden, const assignment &a,
   return legal_layout (layout) && !(registers & forbidden);
 }
 
-template <class G_t>
-static k78k0_instruction_traits
-instruction_constraints (const iCode *ic, const assignment &a, unsigned short i,
-                         const G_t &G)
-{
-  k78k0_instruction_traits constraints = k78k0InstructionTraits (ic);
-
-  if (operand_is_spilled (IC_RIGHT (ic), a, i, G))
-    constraints.left |= constraints.left_if_right_spilled;
-  if (operand_is_spilled (IC_LEFT (ic), a, i, G))
-    constraints.right |= constraints.right_if_left_spilled;
-
-  return constraints;
-}
-
 template <class G_t, class I_t>
 static bool
 inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
@@ -149,7 +128,13 @@ inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
     operand_is_spilled (IC_LEFT (ic), a, i, G) ||
     operand_is_spilled (IC_RIGHT (ic), a, i, G) ||
     operand_is_spilled (IC_RESULT (ic), a, i, G);
-  k78k0_instruction_traits constraints = instruction_constraints (ic, a, i, G);
+  k78k0_instruction_traits constraints = k78k0InstructionTraits (ic);
+
+  if (operand_is_spilled (IC_RIGHT (ic), a, i, G))
+    constraints.left |= constraints.left_if_right_spilled;
+  if (operand_is_spilled (IC_LEFT (ic), a, i, G))
+    constraints.right |= constraints.right_if_left_spilled;
+
   const unsigned clobbers = constraints.clobbers |
     (stack_uses_hl ? K78K0_MASK_HL : 0);
 
@@ -305,11 +290,12 @@ template <class G_t, class I_t>
 static bool
 assignment_hopeless (const assignment &a, unsigned short, const G_t &, const I_t &I, const var_t lastvar)
 {
-  const unsigned size = I[lastvar].size;
+  const int size = I[lastvar].size;
   const var_t first = lastvar - I[lastvar].byte;
-  register_layout layout (size, unknown_register);
+  register_layout layout =
+    {{unknown_register, unknown_register}, size};
 
-  for (unsigned byte = 0; byte < size; byte++)
+  for (int byte = 0; byte < size; byte++)
     {
       const var_t v = first + byte;
 
@@ -402,17 +388,14 @@ allocate (T_t &T, G_t &G, const I_t &I)
   const auto root = find_root (T);
   tree_dec_ralloc_nodes (T, root, G, conflicts, context, &optimal);
   assignment spill_fallback;
-  const assignment &winner = [&]() -> const assignment &
-  {
-    if (T[root].assignments.empty ())
-      {
-        /* An unsupported dry lowering gives every candidate infinite cost.
-           Keep compilation correct by falling back to virtual-stack storage. */
-        spill_fallback.global.resize (variable_count, -1);
-        return spill_fallback;
-      }
-    return *T[root].assignments.begin ();
-  }();
+  const bool allocation_failed = T[root].assignments.empty ();
+
+  /* An unsupported dry lowering gives every candidate infinite cost. Keep
+     compilation correct by falling back to stack storage. */
+  if (allocation_failed)
+    spill_fallback.global.resize (variable_count, spilled_register);
+  const assignment &winner = allocation_failed ?
+    spill_fallback : *T[root].assignments.begin ();
 
   for (unsigned v = 0; v < variable_count;)
     {

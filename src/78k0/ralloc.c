@@ -36,16 +36,16 @@ markRematerializable (iCode *ic)
   operand *result = IC_RESULT (ic);
   operand *left = IC_LEFT (ic);
   operand *right = IC_RIGHT (ic);
+  symbol *sym = IS_ITEMP (result) ? OP_SYMBOL (result) : NULL;
   iCode *remat_ic = NULL;
 
-  if (!result || !IS_ITEMP (result) || POINTER_SET (ic) ||
-      bitVectnBitsOn (OP_DEFS (result)) != 1 || IS_PARM (result))
+  if (!sym || POINTER_SET (ic) || bitVectnBitsOn (sym->defs) != 1 || sym->_isparm)
     return;
 
   if (ic->op == ADDRESS_OF && IS_TRUE_SYMOP (left))
     remat_ic = ic;
   else if ((ic->op == '=' || ic->op == CAST) && IS_SYMOP (right) &&
-           OP_SYMBOL (right)->remat && !isOperandGlobal (result) && !OP_SYMBOL (result)->addrtaken)
+           OP_SYMBOL (right)->remat && !isOperandGlobal (result) && !sym->addrtaken)
     {
       if (ic->op == '=')
         remat_ic = OP_SYMBOL (right)->rematiCode;
@@ -61,7 +61,6 @@ markRematerializable (iCode *ic)
   if (!remat_ic)
     return;
 
-  symbol *sym = OP_SYMBOL (result);
   sym->remat = 1;
   sym->rematiCode = remat_ic;
   sym->usl.spillLoc = NULL;
@@ -138,16 +137,12 @@ operandUsesSymbol (const operand *op, const symbol *sym)
 static bool
 isRegisterSafeUse (const iCode *ic, const symbol *sym)
 {
-  const k78k0_instruction_traits traits = k78k0InstructionTraits (ic);
-  unsigned roles = 0;
+  const unsigned roles =
+    (operandUsesSymbol (IC_LEFT (ic), sym) ? K78K0_ROLE_LEFT : 0) |
+    (operandUsesSymbol (IC_RIGHT (ic), sym) ? K78K0_ROLE_RIGHT : 0) |
+    (operandUsesSymbol (IC_RESULT (ic), sym) ? K78K0_ROLE_RESULT : 0);
 
-  if (operandUsesSymbol (IC_LEFT (ic), sym))
-    roles |= K78K0_ROLE_LEFT;
-  if (operandUsesSymbol (IC_RIGHT (ic), sym))
-    roles |= K78K0_ROLE_RIGHT;
-  if (operandUsesSymbol (IC_RESULT (ic), sym))
-    roles |= K78K0_ROLE_RESULT;
-  return (roles & traits.safe_roles) != 0;
+  return (roles & k78k0InstructionTraits (ic).safe_roles) != 0;
 }
 
 static bool
@@ -221,9 +216,9 @@ k78k0_assignRegisters (ebbIndex *ebbi)
 
       if (sym->isitmp && sym->regType != REG_CND && size > 0 && !sym->remat &&
           !sym->isspilt && !sym->regs[0] &&
-          (sym->liveTo > sym->liveFrom || size > 4 || IS_STRUCT (sym->type)))
-        if (!isDirectlyForwardedHiddenResult (sym))
-          k78k0SpillThis (sym);
+          (sym->liveTo > sym->liveFrom || size > 4 || IS_STRUCT (sym->type)) &&
+          !isDirectlyForwardedHiddenResult (sym))
+        k78k0SpillThis (sym);
     }
 
   if (options.dump_i_code)

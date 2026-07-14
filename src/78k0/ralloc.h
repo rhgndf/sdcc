@@ -24,6 +24,8 @@ enum
   K78K0_RB0_B_IDX,
   K78K0_RB0_E_IDX,
   K78K0_RB0_D_IDX,
+  K78K0_RB0_L_IDX,
+  K78K0_RB0_H_IDX,
   K78K0_PSW_IDX,
   K78K0_SP_IDX
 };
@@ -42,9 +44,8 @@ typedef struct reg_info
 } reg_info;
 
 extern reg_info k78k0_regs[];
-extern bitVect *k78k0_partial_allocations;
 
-void k78k0SpillThis (symbol *, bool);
+void k78k0SpillThis (symbol *);
 iCode *k78k0_ralloc2_cc (ebbIndex *);
 void k78k0_assignRegisters (ebbIndex *);
 

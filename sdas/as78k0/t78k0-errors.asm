@@ -14,8 +14,6 @@
 	movw	ax,0x1fe20	; ERROR: out of range signed / unsigned value
 
 	mov	a,<external_address ; ERROR: Byte selection is not valid for a 78K0 direct address
-	mov	a,external_address ; ERROR: Relocatable direct addresses require explicit addr16 syntax
-	movw	ax,!external_address ; ERROR: Relocatable word addresses cannot be checked for even alignment
 
 	; A forced addr16 prefix is not part of any 78K0 bit-address grammar.
 	set1	!0xff80.0	; ERROR: Forced addr16 syntax is not valid for a 78K0 bit operand

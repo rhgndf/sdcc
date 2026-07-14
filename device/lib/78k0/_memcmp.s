@@ -41,6 +41,11 @@ _memcmp:
 	incw	de
 	mov	a,[de]
 	movw	bc,ax
+	or	a,c
+	bz	00003$
+	mov	a,#0x00
+	cmp	a,c
+	addc	b,a
 	movw	ax,sp
 	addw	ax,#0x0004
 	movw	de,ax
@@ -51,9 +56,6 @@ _memcmp:
 	movw	de,ax
 
 00001$:
-	mov	a,c
-	or	a,b
-	bz	00003$
 	mov	a,[hl]
 	mov	x,a
 	mov	a,[de]
@@ -62,16 +64,8 @@ _memcmp:
 	bnz	00002$
 	incw	hl
 	incw	de
-	decw	bc
-	br	00001$
-
-00002$:
-	sub	a,x
-	mov	x,a
-	mov	a,#0x00
-	subc	a,#0x00
-	movw	bc,ax
-	br	00004$
+	dbnz	c,00001$
+	dbnz	b,00001$
 
 00003$:
 	movw	bc,#0x0000
@@ -84,3 +78,11 @@ _memcmp:
 	push	hl
 	movw	ax,bc
 	ret
+
+00002$:
+	sub	a,x
+	mov	x,a
+	mov	a,#0x00
+	subc	a,#0x00
+	movw	bc,ax
+	br	00004$

@@ -224,8 +224,6 @@ direct_class (const struct expr *e, int forced_addr16)
     {
       if (e->e_rlcf)
         address_error ("Byte selection is not valid for a 78K0 direct address.");
-      else
-        address_error ("Relocatable direct addresses require explicit addr16 syntax.");
       return K78K0_DIR_SADDR;
     }
 
@@ -269,13 +267,8 @@ emit_u8 (struct expr *value)
 static void
 emit_direct_address (struct expr *addr, int kind, int even)
 {
-  if (even)
-    {
-      if (!is_abs (addr))
-        address_error ("Relocatable word addresses cannot be checked for even alignment.");
-      else if (addr->e_addr & 1)
-        address_error ("78K0 word address must be even.");
-    }
+  if (even && is_abs (addr) && (addr->e_addr & 1))
+    address_error ("78K0 word address must be even.");
 
   if (kind == K78K0_DIR_ADDR16)
     outrw (addr, R_NORM);

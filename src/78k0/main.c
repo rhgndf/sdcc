@@ -210,7 +210,7 @@ k78k0_genInitStartup (FILE *of)
          "\tmov\t[hl],a\n"
          "\tincw\thl\n"
          "\tdecw\tbc\n"
-         "\tbr\t!00003$\n"
+         "\tbr\t00003$\n"
          "00004$:\n"
          "\tmovw\tde,#s_INITIALIZER\n"
          "\tmovw\thl,#s_INITIALIZED\n"
@@ -224,7 +224,7 @@ k78k0_genInitStartup (FILE *of)
          "\tincw\tde\n"
          "\tincw\thl\n"
          "\tdecw\tbc\n"
-         "\tbr\t!00001$\n"
+         "\tbr\t00001$\n"
          "00002$:\n",
          of);
 }
@@ -235,68 +235,410 @@ k78k0_dwarfRegNum (const struct reg_info *reg)
   return reg->rIdx;
 }
 
-static bool
-k78k0_isInstruction (const char *text, const char *mnemonic)
+struct k78k0_span
 {
-  const size_t length = strlen (mnemonic);
+  const char *text;
+  size_t length;
+};
 
-  return !STRNCASECMP (text, mnemonic, length) &&
-         (!text[length] || isspace ((unsigned char)text[length]));
+struct k78k0_instruction_view
+{
+  struct k78k0_span mnemonic;
+  struct k78k0_span operand[2];
+  unsigned operand_count;
+  bool compiler_generated;
+};
+
+enum k78k0_operand_class
+{
+  K78K0_OPERAND_NONE,
+  K78K0_OPERAND_BYTE_REGISTER,
+  K78K0_OPERAND_REGISTER_PAIR,
+  K78K0_OPERAND_SP,
+  K78K0_OPERAND_PSW,
+  K78K0_OPERAND_IMMEDIATE,
+  K78K0_OPERAND_SADDR,
+  K78K0_OPERAND_SFR,
+  K78K0_OPERAND_ADDR16,
+  K78K0_OPERAND_DE,
+  K78K0_OPERAND_HL,
+  K78K0_OPERAND_HL_DISP,
+  K78K0_OPERAND_HL_BC,
+  K78K0_OPERAND_BIT_CY,
+  K78K0_OPERAND_BIT_A,
+  K78K0_OPERAND_BIT_PSW,
+  K78K0_OPERAND_BIT_HL,
+  K78K0_OPERAND_BIT_SADDR,
+  K78K0_OPERAND_BIT_SFR
+};
+
+static struct k78k0_span
+k78k0_trimSpan (struct k78k0_span span)
+{
+  while (span.length && isspace ((unsigned char)*span.text))
+    span.text++, span.length--;
+  while (span.length && isspace ((unsigned char)span.text[span.length - 1]))
+    span.length--;
+  return span;
+}
+
+static bool
+k78k0_spanEqual (const struct k78k0_span span, const char *text)
+{
+  const size_t length = strlen (text);
+
+  return span.length == length && !STRNCASECMP (span.text, text, length);
+}
+
+static bool
+k78k0_splitOperands (const char *text, struct k78k0_instruction_view *view)
+{
+  const char *end = strchr (text, ';');
+  const char *comma;
+
+  if (!end)
+    end = text + strlen (text);
+  view->operand_count = 0;
+  comma = memchr (text, ',', (size_t)(end - text));
+  if (comma)
+    {
+      if (memchr (comma + 1, ',', (size_t)(end - comma - 1)))
+        return false;
+      view->operand[view->operand_count++] = k78k0_trimSpan (
+        (struct k78k0_span){text, (size_t)(comma - text)});
+      text = comma + 1;
+    }
+  struct k78k0_span operand = k78k0_trimSpan (
+    (struct k78k0_span){text, (size_t)(end - text)});
+  if (operand.length)
+    view->operand[view->operand_count++] = operand;
+  return (!comma || view->operand_count == 2) &&
+    (!view->operand_count || view->operand[0].length);
+}
+
+static bool
+k78k0_absoluteValue (struct k78k0_span span, unsigned long *value)
+{
+  unsigned base = 10;
+  unsigned long result = 0;
+
+  span = k78k0_trimSpan (span);
+  if (span.length > 2 && span.text[0] == '0' &&
+      tolower ((unsigned char)span.text[1]) == 'x')
+    span.text += 2, span.length -= 2, base = 16;
+  if (!span.length)
+    return false;
+  for (size_t i = 0; i < span.length; i++)
+    {
+      const unsigned char c = (unsigned char)tolower ((unsigned char)span.text[i]);
+      const unsigned digit = isdigit (c) ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : base;
+
+      if (digit >= base || result > (ULONG_MAX - digit) / base)
+        return false;
+      result = result * base + digit;
+    }
+  *value = result;
+  return true;
+}
+
+static enum k78k0_operand_class
+k78k0_classifyDirectValue (const unsigned long address, const bool bit)
+{
+  if (address >= 0xfe20ul && address <= 0xff1ful)
+    return bit ? K78K0_OPERAND_BIT_SADDR : K78K0_OPERAND_SADDR;
+  if ((address >= 0xff00ul && address <= 0xffcful) ||
+      (address >= 0xffe0ul && address <= 0xfffful))
+    return bit ? K78K0_OPERAND_BIT_SFR : K78K0_OPERAND_SFR;
+  return K78K0_OPERAND_NONE;
+}
+
+static enum k78k0_operand_class
+k78k0_classifyOperand (struct k78k0_span operand, const bool compiler_generated)
+{
+  static const struct
+  {
+    const char *text;
+    enum k78k0_operand_class class;
+  }
+  exact[] = {
+    {"x", K78K0_OPERAND_BYTE_REGISTER}, {"a", K78K0_OPERAND_BYTE_REGISTER},
+    {"c", K78K0_OPERAND_BYTE_REGISTER}, {"b", K78K0_OPERAND_BYTE_REGISTER},
+    {"e", K78K0_OPERAND_BYTE_REGISTER}, {"d", K78K0_OPERAND_BYTE_REGISTER},
+    {"l", K78K0_OPERAND_BYTE_REGISTER}, {"h", K78K0_OPERAND_BYTE_REGISTER},
+    {"ax", K78K0_OPERAND_REGISTER_PAIR}, {"bc", K78K0_OPERAND_REGISTER_PAIR},
+    {"de", K78K0_OPERAND_REGISTER_PAIR}, {"hl", K78K0_OPERAND_REGISTER_PAIR},
+    {"sp", K78K0_OPERAND_SP}, {"psw", K78K0_OPERAND_PSW},
+    {"[de]", K78K0_OPERAND_DE}, {"[hl]", K78K0_OPERAND_HL}
+  };
+  struct k78k0_span base;
+  struct k78k0_span suffix;
+  unsigned long address;
+
+  operand = k78k0_trimSpan (operand);
+  if (!operand.length)
+    return K78K0_OPERAND_NONE;
+  if (k78k0_spanEqual (operand, "cy"))
+    return K78K0_OPERAND_BIT_CY;
+  for (size_t i = operand.length; i-- > 0;)
+    if (operand.text[i] == '.')
+      {
+        base.text = operand.text;
+        base.length = i;
+        suffix.text = operand.text + i + 1;
+        suffix.length = operand.length - i - 1;
+        if (!compiler_generated &&
+            (!k78k0_absoluteValue (suffix, &address) || address > 7))
+          return K78K0_OPERAND_NONE;
+        if (k78k0_spanEqual (base, "a"))
+          return K78K0_OPERAND_BIT_A;
+        if (k78k0_spanEqual (base, "psw"))
+          return K78K0_OPERAND_BIT_PSW;
+        if (k78k0_spanEqual (base, "[hl]"))
+          return K78K0_OPERAND_BIT_HL;
+        if (k78k0_absoluteValue (base, &address))
+          return k78k0_classifyDirectValue (address, true);
+        return compiler_generated ? K78K0_OPERAND_BIT_SFR : K78K0_OPERAND_NONE;
+      }
+  for (size_t i = 0; i < sizeof exact / sizeof *exact; i++)
+    if (k78k0_spanEqual (operand, exact[i].text))
+      return exact[i].class;
+  if (operand.text[0] == '#')
+    return compiler_generated || operand.length > 1 ?
+      K78K0_OPERAND_IMMEDIATE : K78K0_OPERAND_NONE;
+  if (operand.text[0] == '!')
+    return compiler_generated || operand.length > 1 ?
+      K78K0_OPERAND_ADDR16 : K78K0_OPERAND_NONE;
+  if (operand.length >= 4 && !STRNCASECMP (operand.text, "[hl+", 4))
+    {
+      struct k78k0_span displacement;
+
+      if (k78k0_spanEqual (operand, "[hl+b]") || k78k0_spanEqual (operand, "[hl+c]"))
+        return K78K0_OPERAND_HL_BC;
+      if (compiler_generated)
+        return K78K0_OPERAND_HL_DISP;
+      if (operand.length < 6 || operand.text[operand.length - 1] != ']')
+        return K78K0_OPERAND_NONE;
+      displacement.text = operand.text + 4;
+      displacement.length = operand.length - 5;
+      return k78k0_absoluteValue (displacement, &address) && address <= 0xfful ?
+        K78K0_OPERAND_HL_DISP : K78K0_OPERAND_NONE;
+    }
+  if (k78k0_absoluteValue (operand, &address))
+    return k78k0_classifyDirectValue (address, false);
+  return compiler_generated ? K78K0_OPERAND_SADDR : K78K0_OPERAND_NONE;
+}
+
+static bool
+k78k0_isAccumulator (const struct k78k0_span operand)
+{
+  return k78k0_spanEqual (operand, "a");
 }
 
 static int
-k78k0_instructionSize (lineNode *line)
+k78k0_memorySize (const enum k78k0_operand_class operand, const bool prefix)
 {
-  const char *text = line->line;
-  const char *arg;
+  return operand == K78K0_OPERAND_DE || operand == K78K0_OPERAND_HL ? 1 :
+    operand == K78K0_OPERAND_HL_DISP ? 2 : operand == K78K0_OPERAND_HL_BC ?
+    prefix + 1 : 999;
+}
 
-  while (isspace ((unsigned char)*text))
-    text++;
+static int
+k78k0_directSize (const enum k78k0_operand_class operand)
+{
+  return operand == K78K0_OPERAND_ADDR16 ? 3 :
+    operand == K78K0_OPERAND_SADDR || operand == K78K0_OPERAND_SFR ? 2 : 999;
+}
 
-  if (!*text || *text == ';' || strchr (text, ':'))
+static int
+k78k0_fixedInstructionSize (const struct k78k0_span mnemonic,
+                            const unsigned operand_count)
+{
+  static const struct
+  {
+    const char *mnemonic;
+    unsigned char size;
+    unsigned char operands;
+  }
+  instructions[] = {
+    {"adjba", 2, 0}, {"adjbs", 2, 0}, {"addw", 3, 2}, {"bc", 2, 1},
+    {"bnc", 2, 1}, {"bnz", 2, 1}, {"brk", 1, 0}, {"bz", 2, 1},
+    {"call", 3, 1}, {"callf", 2, 1}, {"callt", 1, 1}, {"cmpw", 3, 2},
+    {"decw", 1, 1}, {"di", 2, 0}, {"divuw", 2, 1}, {"ei", 2, 0},
+    {"halt", 2, 0}, {"incw", 1, 1}, {"mulu", 2, 1}, {"nop", 1, 0},
+    {"not1", 1, 1}, {"pop", 1, 1}, {"push", 1, 1}, {"ret", 1, 0},
+    {"retb", 1, 0}, {"reti", 1, 0}, {"rol", 1, 2}, {"rol4", 2, 1},
+    {"rolc", 1, 2}, {"ror", 1, 2}, {"ror4", 2, 1}, {"rorc", 1, 2},
+    {"sel", 2, 1}, {"stop", 2, 0}, {"subw", 3, 2}, {"xchw", 1, 2}
+  };
+
+  for (size_t i = 0; i < sizeof instructions / sizeof *instructions; i++)
+    if (k78k0_spanEqual (mnemonic, instructions[i].mnemonic))
+      return operand_count == instructions[i].operands ? instructions[i].size : 999;
+  return 0;
+}
+
+static int
+k78k0_sizeInstruction (const struct k78k0_instruction_view *view)
+{
+  const struct k78k0_span left = view->operand_count ? view->operand[0] : (struct k78k0_span){NULL, 0};
+  const struct k78k0_span right = view->operand_count > 1 ? view->operand[1] : (struct k78k0_span){NULL, 0};
+  const int fixed_size = k78k0_fixedInstructionSize (view->mnemonic, view->operand_count);
+
+  if (fixed_size)
+    return fixed_size;
+
+  const enum k78k0_operand_class left_class = k78k0_classifyOperand (left, view->compiler_generated);
+  const enum k78k0_operand_class right_class = k78k0_classifyOperand (right, view->compiler_generated);
+
+  if (k78k0_spanEqual (view->mnemonic, "br"))
+    return view->operand_count != 1 ? 999 : k78k0_spanEqual (left, "ax") ? 2 :
+      left_class == K78K0_OPERAND_ADDR16 ? 3 :
+      (view->compiler_generated || (left.length && left.text[left.length - 1] == '$')) ? 2 : 999;
+  if (k78k0_spanEqual (view->mnemonic, "dbnz"))
+    return view->operand_count != 2 ? 999 :
+      k78k0_spanEqual (left, "b") || k78k0_spanEqual (left, "c") ? 2 :
+      left_class == K78K0_OPERAND_SADDR ? 3 : 999;
+  if (k78k0_spanEqual (view->mnemonic, "inc") || k78k0_spanEqual (view->mnemonic, "dec"))
+    return view->operand_count != 1 ? 999 :
+      left_class == K78K0_OPERAND_BYTE_REGISTER ? 1 :
+      left_class == K78K0_OPERAND_SADDR ? 2 : 999;
+
+  if (k78k0_spanEqual (view->mnemonic, "set1") || k78k0_spanEqual (view->mnemonic, "clr1"))
+    return view->operand_count != 1 ? 999 : left_class == K78K0_OPERAND_BIT_CY ? 1 :
+      left_class == K78K0_OPERAND_BIT_SFR ? 3 :
+      left_class >= K78K0_OPERAND_BIT_A ? 2 : 999;
+  if (k78k0_spanEqual (view->mnemonic, "mov1") || k78k0_spanEqual (view->mnemonic, "and1") ||
+      k78k0_spanEqual (view->mnemonic, "or1") || k78k0_spanEqual (view->mnemonic, "xor1"))
+    {
+      if (view->operand_count != 2)
+        return 999;
+      const enum k78k0_operand_class bit = left_class == K78K0_OPERAND_BIT_CY ? right_class : left_class;
+      return bit == K78K0_OPERAND_BIT_A || bit == K78K0_OPERAND_BIT_HL ? 2 :
+        bit >= K78K0_OPERAND_BIT_PSW ? 3 : 999;
+    }
+  if (k78k0_spanEqual (view->mnemonic, "bt") || k78k0_spanEqual (view->mnemonic, "bf") ||
+      k78k0_spanEqual (view->mnemonic, "btclr"))
+    {
+      if (view->operand_count != 2)
+        return 999;
+      if (left_class == K78K0_OPERAND_BIT_A || left_class == K78K0_OPERAND_BIT_HL)
+        return 3;
+      return k78k0_spanEqual (view->mnemonic, "bt") &&
+        (left_class == K78K0_OPERAND_BIT_SADDR || left_class == K78K0_OPERAND_BIT_PSW) ? 3 :
+        left_class >= K78K0_OPERAND_BIT_PSW ? 4 : 999;
+    }
+
+  if (k78k0_spanEqual (view->mnemonic, "mov"))
+    {
+      if (k78k0_isAccumulator (left))
+        {
+          if (right_class == K78K0_OPERAND_IMMEDIATE) return 2;
+          if (right_class >= K78K0_OPERAND_DE && right_class <= K78K0_OPERAND_HL_BC)
+            return k78k0_memorySize (right_class, false);
+          if (right_class == K78K0_OPERAND_BYTE_REGISTER) return 1;
+          if (right_class == K78K0_OPERAND_PSW) return 2;
+          return k78k0_directSize (right_class);
+        }
+      if (left_class == K78K0_OPERAND_PSW)
+        return right_class == K78K0_OPERAND_IMMEDIATE ? 3 : k78k0_isAccumulator (right) ? 2 : 999;
+      if (left_class == K78K0_OPERAND_BYTE_REGISTER)
+        return right_class == K78K0_OPERAND_IMMEDIATE ? 2 : k78k0_isAccumulator (right) ? 1 : 999;
+      if (left_class >= K78K0_OPERAND_DE && left_class <= K78K0_OPERAND_HL_BC)
+        return k78k0_isAccumulator (right) ? k78k0_memorySize (left_class, false) : 999;
+      if (left_class == K78K0_OPERAND_SADDR || left_class == K78K0_OPERAND_SFR ||
+          left_class == K78K0_OPERAND_ADDR16)
+        return right_class == K78K0_OPERAND_IMMEDIATE ? 3 :
+          k78k0_isAccumulator (right) ? k78k0_directSize (left_class) : 999;
+      return 999;
+    }
+
+  if (k78k0_spanEqual (view->mnemonic, "movw"))
+    {
+      if (left_class == K78K0_OPERAND_REGISTER_PAIR)
+        return right_class == K78K0_OPERAND_IMMEDIATE ? 3 :
+          right_class == K78K0_OPERAND_SP ? 2 :
+          right_class == K78K0_OPERAND_REGISTER_PAIR ? 1 : k78k0_directSize (right_class);
+      if (left_class == K78K0_OPERAND_SP)
+        return right_class == K78K0_OPERAND_IMMEDIATE ? 4 :
+          right_class == K78K0_OPERAND_REGISTER_PAIR ? 2 : 999;
+      if (left_class == K78K0_OPERAND_SADDR || left_class == K78K0_OPERAND_SFR ||
+          left_class == K78K0_OPERAND_ADDR16)
+        return right_class == K78K0_OPERAND_IMMEDIATE ? 4 :
+          right_class == K78K0_OPERAND_REGISTER_PAIR ? k78k0_directSize (left_class) : 999;
+      return 999;
+    }
+
+  if (k78k0_spanEqual (view->mnemonic, "add") || k78k0_spanEqual (view->mnemonic, "addc") ||
+      k78k0_spanEqual (view->mnemonic, "sub") || k78k0_spanEqual (view->mnemonic, "subc") ||
+      k78k0_spanEqual (view->mnemonic, "and") || k78k0_spanEqual (view->mnemonic, "or") ||
+      k78k0_spanEqual (view->mnemonic, "xor") || k78k0_spanEqual (view->mnemonic, "cmp"))
+    {
+      if (k78k0_isAccumulator (left))
+        {
+          if (right_class == K78K0_OPERAND_IMMEDIATE || right_class == K78K0_OPERAND_BYTE_REGISTER)
+            return 2;
+          if (right_class >= K78K0_OPERAND_DE && right_class <= K78K0_OPERAND_HL_BC)
+            return k78k0_memorySize (right_class, true);
+          return k78k0_directSize (right_class);
+        }
+      return left_class == K78K0_OPERAND_BYTE_REGISTER && k78k0_isAccumulator (right) ? 2 :
+        left_class == K78K0_OPERAND_SADDR && right_class == K78K0_OPERAND_IMMEDIATE ? 3 : 999;
+    }
+
+  if (k78k0_spanEqual (view->mnemonic, "xch") && k78k0_isAccumulator (left))
+    {
+      if (right_class >= K78K0_OPERAND_DE && right_class <= K78K0_OPERAND_HL_BC)
+        return k78k0_memorySize (right_class, true);
+      return right_class == K78K0_OPERAND_BYTE_REGISTER ? 1 : k78k0_directSize (right_class);
+    }
+  return 999;
+}
+
+int
+k78k0_instructionSize (const char *mnemonic, const char *operands)
+{
+  /* emit2() supplies canonical compiler output. */
+  struct k78k0_instruction_view view = {
+    {mnemonic, strlen (mnemonic)}, {{NULL, 0}, {NULL, 0}}, 0, true
+  };
+
+  return k78k0_splitOperands (operands, &view) ? k78k0_sizeInstruction (&view) : 999;
+}
+
+static int
+k78k0_instructionSizeLine (lineNode *line)
+{
+  /* Arbitrary assembly gets no compiler-only symbolic fallbacks. */
+  struct k78k0_instruction_view view = {
+    {NULL, 0}, {{NULL, 0}, {NULL, 0}}, 0, false
+  };
+  const char *cursor = line->line;
+
+  while (isspace ((unsigned char)*cursor))
+    cursor++;
+  if (!*cursor || *cursor == ';')
     return 0;
-  if (*text == '.')
+  view.mnemonic.text = cursor;
+  while (*cursor && !isspace ((unsigned char)*cursor) && *cursor != ';')
+    cursor++;
+  view.mnemonic.length = (size_t)(cursor - view.mnemonic.text);
+  if (!view.mnemonic.length || view.mnemonic.text[0] == '.')
     return 999;
-
-  arg = text;
-  while (*arg && !isspace ((unsigned char)*arg))
-    arg++;
-  while (isspace ((unsigned char)*arg))
-    arg++;
-
-  if (k78k0_isInstruction (text, "ret") || k78k0_isInstruction (text, "retb") ||
-      k78k0_isInstruction (text, "reti") || k78k0_isInstruction (text, "brk") ||
-      k78k0_isInstruction (text, "nop") || k78k0_isInstruction (text, "push") ||
-      k78k0_isInstruction (text, "pop") || k78k0_isInstruction (text, "incw") ||
-      k78k0_isInstruction (text, "decw") || k78k0_isInstruction (text, "xchw") ||
-      k78k0_isInstruction (text, "rol") || k78k0_isInstruction (text, "rolc") ||
-      k78k0_isInstruction (text, "ror") || k78k0_isInstruction (text, "rorc"))
-    return 1;
-  if (k78k0_isInstruction (text, "bc") || k78k0_isInstruction (text, "bnc") ||
-      k78k0_isInstruction (text, "bz") || k78k0_isInstruction (text, "bnz") ||
-      k78k0_isInstruction (text, "mulu") || k78k0_isInstruction (text, "divuw"))
-    return 2;
-  if (k78k0_isInstruction (text, "br"))
-    return *arg == '!' ? 3 : 2;
-  if (k78k0_isInstruction (text, "dbnz"))
-    return (tolower ((unsigned char)*arg) == 'b' || tolower ((unsigned char)*arg) == 'c') &&
-           arg[1] == ',' ? 2 : 3;
-  if (k78k0_isInstruction (text, "call") || k78k0_isInstruction (text, "addw") ||
-      k78k0_isInstruction (text, "subw") || k78k0_isInstruction (text, "cmpw"))
-    return 3;
-  if ((k78k0_isInstruction (text, "bt") || k78k0_isInstruction (text, "bf")) &&
-      tolower ((unsigned char)arg[0]) == 'a' && arg[1] == '.')
-    return 3;
-
-  /* Four bytes is the longest encoding. The fallback keeps range checks
-     conservative for instructions whose size depends on their operands. */
-  return 4;
+  const char *colon = memchr (view.mnemonic.text, ':', view.mnemonic.length);
+  if (colon)
+    {
+      while (isspace ((unsigned char)*cursor))
+        cursor++;
+      return colon == view.mnemonic.text + view.mnemonic.length - 1 &&
+        (!*cursor || *cursor == ';') ? 0 : 999;
+    }
+  return k78k0_splitOperands (cursor, &view) ? k78k0_sizeInstruction (&view) : 999;
 }
 
 static bool
 k78k0_isPromotedUnsignedByte (const iCode *ic)
 {
-  const operand *op = IC_RIGHT (ic);
+  operand *const op = IC_RIGHT (ic);
 
   if (!IS_SYMOP (op) || bitVectnBitsOn (OP_DEFS (op)) != 1)
     return false;
@@ -391,7 +733,7 @@ PORT k78k0_port =
   },
   {
     k78k0_defaultRules,
-    k78k0_instructionSize,
+    k78k0_instructionSizeLine,
     NULL,
     NULL,
     NULL,
@@ -523,6 +865,6 @@ PORT k78k0_port =
   false,
   1,
   1,
-  6,
+  8,
   PORT_MAGIC
 };

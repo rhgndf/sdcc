@@ -7,7 +7,9 @@
 	.globl	word_value
 
 	call	!addr16_byte
+	mov	a,byte_value
 	mov	a,#byte_value
 	mov	a,#<word_value
 	mov	a,#>word_value
 	mov	a,[hl+byte_value]
+	movw	ax,!word_value

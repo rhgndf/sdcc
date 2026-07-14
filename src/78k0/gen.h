@@ -38,7 +38,41 @@ typedef struct asmop
 }
 asmop;
 
+enum
+{
+  K78K0_MASK_AX = (1 << K78K0_RB0_X_IDX) | (1 << K78K0_RB0_A_IDX),
+  K78K0_MASK_C = 1 << K78K0_RB0_C_IDX,
+  K78K0_MASK_B = 1 << K78K0_RB0_B_IDX,
+  K78K0_MASK_BC = K78K0_MASK_C | K78K0_MASK_B,
+  K78K0_MASK_DE = (1 << K78K0_RB0_E_IDX) | (1 << K78K0_RB0_D_IDX),
+  K78K0_MASK_HL = (1 << K78K0_RB0_L_IDX) | (1 << K78K0_RB0_H_IDX),
+  K78K0_MASK_ALL = K78K0_MASK_AX | K78K0_MASK_BC | K78K0_MASK_DE | K78K0_MASK_HL,
+};
+
+enum
+{
+  K78K0_ROLE_LEFT = 1u << 0,
+  K78K0_ROLE_RIGHT = 1u << 1,
+  K78K0_ROLE_RESULT = 1u << 2,
+};
+
+typedef struct
+{
+  unsigned clobbers;
+  unsigned left;
+  unsigned right;
+  unsigned result;
+  unsigned left_if_right_spilled;
+  unsigned right_if_left_spilled;
+  unsigned safe_roles;
+}
+k78k0_instruction_traits;
+
 void gen78K0Code (iCode *);
 void k78k0_emitDebuggerSymbol (const char *);
+int k78k0_instructionSize (const char *, const char *);
+float k78k0DryInstructionCost (iCode *);
+k78k0_instruction_traits k78k0InstructionTraits (const iCode *);
+iCode *k78k0HiddenReturnForwardBridge (iCode *, sym_link *);
 
 #endif

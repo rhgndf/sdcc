@@ -13,103 +13,59 @@
 
 extern "C"
 {
-#include "ralloc.h"
+#include "gen.h"
 }
-
-enum
-{
-  MASK_AX = (1 << K78K0_RB0_X_IDX) | (1 << K78K0_RB0_A_IDX),
-  MASK_C = 1 << K78K0_RB0_C_IDX,
-  MASK_B = 1 << K78K0_RB0_B_IDX,
-  MASK_BC = (1 << K78K0_RB0_C_IDX) | (1 << K78K0_RB0_B_IDX),
-  MASK_DE = (1 << K78K0_RB0_E_IDX) | (1 << K78K0_RB0_D_IDX),
-  MASK_ALL = (1 << 6) - 1,
-};
 
 template <class I_t>
 static void add_operand_conflicts_in_node (const cfg_node &, I_t &) {}
 
-static bool
-legal_layout (const std::vector<reg_t> &layout)
+static constexpr reg_t spilled_register = -1;
+static constexpr reg_t unknown_register = -2;
+
+struct register_layout
 {
-  const unsigned size = layout.size ();
-  if (std::all_of (layout.begin (), layout.end (), [](reg_t reg) { return reg < 0; }))
+  register_layout (unsigned size, reg_t initial) : size (size)
+  {
+    bytes[0] = bytes[1] = initial;
+  }
+
+  reg_t bytes[2];
+  unsigned size;
+};
+
+static bool
+layout_completable (const register_layout &layout)
+{
+  if (layout.size == 1)
+    return layout.bytes[0] == unknown_register ||
+      layout.bytes[0] == spilled_register ||
+      (layout.bytes[0] >= K78K0_RB0_X_IDX &&
+       layout.bytes[0] <= K78K0_RB0_H_IDX);
+  if (layout.size != 2)
+    return false;
+
+  const auto matches = [&layout](reg_t low, reg_t high)
+  {
+    return (layout.bytes[0] == unknown_register || layout.bytes[0] == low) &&
+      (layout.bytes[1] == unknown_register || layout.bytes[1] == high);
+  };
+
+  if (matches (spilled_register, spilled_register))
     return true;
 
-  const bool has_spill = std::any_of (layout.begin (), layout.end (), [](reg_t reg) { return reg < 0; });
-  if (size <= 2)
-    return !has_spill && (size == 1 ? layout[0] >= K78K0_RB0_X_IDX && layout[0] <= K78K0_RB0_D_IDX :
-                          layout[0] % 2 == 0 && layout[1] == layout[0] + 1);
-  if (size > 4)
-    return false;
-  for (unsigned byte = 0; byte < size; byte++)
-    if (layout[byte] >= 0 && layout[byte] != (reg_t)byte)
-      return false;
-  return !has_spill || (size == 4 && (layout[0] < 0) == (layout[1] < 0) &&
-                         (layout[2] < 0) == (layout[3] < 0));
+  for (reg_t low = K78K0_RB0_X_IDX; low <= K78K0_RB0_L_IDX; low += 2)
+    if (matches (low, low + 1))
+      return true;
+
+  return false;
 }
 
-static int
-instruction_clobbers (const iCode *ic)
+static bool
+legal_layout (const register_layout &layout)
 {
-  const operand *right = IC_RIGHT (ic);
-  const int result_size = IC_RESULT (ic) ? getSize (operandType (IC_RESULT (ic))) : 0;
-  const int left_size = IC_LEFT (ic) ? getSize (operandType (IC_LEFT (ic))) : 0;
-
-  switch (ic->op)
-    {
-    case FUNCTION:
-    case ENDFUNCTION:
-    case GOTO:
-    case RETURN:
-    case LABEL:
-      return 0;
-    case ADDRESS_OF:
-      return MASK_AX;
-    case '=':
-      return !POINTER_SET (ic) && result_size == 1 ? MASK_AX | MASK_C : MASK_ALL;
-    case GET_VALUE_AT_ADDRESS:
-      return MASK_AX | MASK_C | MASK_DE;
-    case '+':
-    case '-':
-      if (result_size == 2 && right && IS_OP_LITERAL (right) && left_size == 2)
-        return MASK_AX;
-      if (result_size == 1)
-        return MASK_AX | MASK_C;
-      return MASK_ALL;
-    case '*':
-      return result_size == 1 ? MASK_AX | MASK_C : MASK_ALL;
-    case LEFT_OP:
-    case RIGHT_OP:
-    case ROT:
-      return result_size == 1 ? MASK_AX | MASK_BC : MASK_ALL;
-    case '/':
-    case '%':
-    case BITWISEAND:
-    case '|':
-    case '^':
-    case UNARYMINUS:
-    case '!':
-    case CAST:
-    case GETBYTE:
-    case GETWORD:
-    case GETABIT:
-      return result_size == 1 ? MASK_AX | MASK_C : MASK_ALL;
-    case EQ_OP:
-    case NE_OP:
-    case '<':
-    case '>':
-      if (left_size == 2 && right && IS_OP_LITERAL (right))
-        return MASK_AX;
-      return left_size == 1 ? MASK_AX | MASK_C : MASK_ALL;
-    case IFX:
-      {
-        const int size = IC_COND (ic) ? getSize (operandType (IC_COND (ic))) : 0;
-        return !size || size > 2 ? MASK_ALL : size == 1 ? MASK_AX : MASK_AX | MASK_B;
-      }
-    default:
-      return MASK_ALL;
-    }
+  return layout.bytes[0] != unknown_register &&
+    (layout.size == 1 || layout.bytes[1] != unknown_register) &&
+    layout_completable (layout);
 }
 
 static bool
@@ -117,12 +73,6 @@ operand_is_symbol (const operand *op, const int key)
 {
   return op && IS_SYMOP (op) && OP_SYMBOL_CONST (op)->key == key;
 }
-
-struct value_layout
-{
-  std::vector<reg_t> registers;
-  bool survives = false;
-};
 
 template <class G_t>
 static bool
@@ -134,10 +84,14 @@ operand_is_spilled (const operand *op, const assignment &a, unsigned short i, co
   const symbol *sym = OP_SYMBOL_CONST (op);
   if (IS_TRUE_SYMOP (op))
     return sym->onStack;
-  if (!IS_ITEMP (op))
+  if (!IS_ITEMP (op) || sym->remat || sym->regType == REG_CND)
     return false;
 
   const auto range = G[i].operands.equal_range (sym->key);
+  /* Graph-absent iTemps use the generic dry stack operand and receive a real
+     spill slot after allocation when their lifetime requires one. */
+  if (range.first == range.second)
+    return true;
   for (auto operand = range.first; operand != range.second; ++operand)
     if (a.global[operand->second] < 0)
       return true;
@@ -146,71 +100,204 @@ operand_is_spilled (const operand *op, const assignment &a, unsigned short i, co
 
 template <class G_t, class I_t>
 static bool
+operand_sane (const operand *op, unsigned forbidden, const assignment &a,
+              unsigned short i, const G_t &G, const I_t &I)
+{
+  if (!op || !IS_SYMOP (op))
+    return true;
+
+  const auto range = G[i].operands.equal_range (OP_SYMBOL_CONST (op)->key);
+  if (range.first == range.second)
+    return true;
+
+  register_layout layout (I[range.first->second].size, spilled_register);
+  unsigned registers = 0;
+  for (auto entry = range.first; entry != range.second; ++entry)
+    {
+      const reg_t reg = a.global[entry->second];
+
+      layout.bytes[I[entry->second].byte] = reg;
+      if (reg >= 0)
+        registers |= 1u << reg;
+    }
+
+  return legal_layout (layout) && !(registers & forbidden);
+}
+
+template <class G_t>
+static k78k0_instruction_traits
+instruction_constraints (const iCode *ic, const assignment &a, unsigned short i,
+                         const G_t &G)
+{
+  k78k0_instruction_traits constraints = k78k0InstructionTraits (ic);
+
+  if (operand_is_spilled (IC_RIGHT (ic), a, i, G))
+    constraints.left |= constraints.left_if_right_spilled;
+  if (operand_is_spilled (IC_LEFT (ic), a, i, G))
+    constraints.right |= constraints.right_if_left_spilled;
+
+  return constraints;
+}
+
+template <class G_t, class I_t>
+static bool
 inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
 {
   const iCode *ic = G[i].ic;
-  const operand *left = IC_LEFT (ic);
-  const operand *right = IC_RIGHT (ic);
-  const int clobbers = instruction_clobbers (ic);
-  const bool right_needs_ax_free = ic->op == '+' || ic->op == '-' || ic->op == '*' ||
-    ic->op == BITWISEAND || ic->op == '|' || ic->op == '^' || ic->op == EQ_OP ||
-    ic->op == NE_OP || ic->op == '<' || ic->op == '>';
-  std::map<int, value_layout> values;
+  const bool stack_uses_hl = ic->op == ADDRESS_OF ?
+    operand_is_spilled (IC_RESULT (ic), a, i, G) :
+    operand_is_spilled (IC_LEFT (ic), a, i, G) ||
+    operand_is_spilled (IC_RIGHT (ic), a, i, G) ||
+    operand_is_spilled (IC_RESULT (ic), a, i, G);
+  k78k0_instruction_traits constraints = instruction_constraints (ic, a, i, G);
+  const unsigned clobbers = constraints.clobbers |
+    (stack_uses_hl ? K78K0_MASK_HL : 0);
+
+  /* HL is the backend's stack and pointer scratch pair. Dying inputs need an
+     explicit restriction because the survivor check below does not cover them. */
+  if (clobbers & K78K0_MASK_HL)
+    {
+      constraints.left |= K78K0_MASK_HL;
+      constraints.right |= K78K0_MASK_HL;
+      if (POINTER_SET (ic))
+        constraints.result |= K78K0_MASK_HL;
+    }
+
+  if (!operand_sane (IC_LEFT (ic), constraints.left, a, i, G, I) ||
+      !operand_sane (IC_RIGHT (ic), constraints.right, a, i, G, I) ||
+      !operand_sane (IC_RESULT (ic), constraints.result, a, i, G, I))
+    return false;
 
   for (var_t v : G[i].alive)
-    {
-      value_layout &value = values[I[v].v];
-
-      if (value.registers.empty ())
-        value.registers.resize (I[v].size, -1);
-      value.registers[I[v].byte] = a.global[v];
-      value.survives |= G[i].dying.find (v) == G[i].dying.end ();
-    }
-
-  for (const auto &entry : values)
-    {
-      const value_layout &value = entry.second;
-      const std::vector<reg_t> &layout = value.registers;
-      const bool byte_in_register = layout.size () == 1 && layout[0] >= 0;
-      const bool byte_in_ax = byte_in_register && layout[0] <= K78K0_RB0_A_IDX;
-      int used_registers = 0;
-
-      for (reg_t reg : layout)
-        if (reg >= 0)
-          used_registers |= 1 << reg;
-
-      if (!legal_layout (layout))
-        return false;
-
-      if ((ic->op == LEFT_OP || ic->op == RIGHT_OP) && operand_is_symbol (right, entry.first) &&
-          byte_in_register && layout[0] != K78K0_RB0_C_IDX)
-        return false;
-
-      if (byte_in_ax && right_needs_ax_free &&
-          (operand_is_symbol (right, entry.first) ||
-           (operand_is_symbol (left, entry.first) && operand_is_spilled (right, a, i, G))))
-        return false;
-
-      const bool overwritten = !POINTER_SET (ic) && operand_is_symbol (IC_RESULT (ic), entry.first);
-      if (value.survives && !overwritten && (used_registers & clobbers))
-        return false;
-    }
+    if (a.global[v] >= 0 && G[i].dying.find (v) == G[i].dying.end () &&
+        (POINTER_SET (ic) || !operand_is_symbol (IC_RESULT (ic), I[v].v)) &&
+        (clobbers & (1u << a.global[v])))
+      return false;
 
   return true;
+}
+
+template <class G_t, class I_t>
+static void
+set_surviving_regs (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
+{
+  iCode *ic = G[i].ic;
+
+  bitVectClear (ic->rMask);
+  bitVectClear (ic->rSurv);
+  for (var_t v : G[i].alive)
+    if (a.global[v] >= 0)
+      {
+        ic->rMask = bitVectSetBit (ic->rMask, a.global[v]);
+        if (G[i].dying.find (v) == G[i].dying.end () &&
+            (POINTER_SET (ic) || !operand_is_symbol (IC_RESULT (ic), I[v].v)))
+          ic->rSurv = bitVectSetBit (ic->rSurv, a.global[v]);
+      }
+}
+
+template <class G_t, class I_t>
+static void
+assign_operand_for_cost (operand *op, const assignment &a, unsigned short i,
+                         const G_t &G, const I_t &I)
+{
+  if (!op || !IS_SYMOP (op))
+    return;
+
+  symbol *sym = OP_SYMBOL (op);
+  const auto range = G[i].operands.equal_range (sym->key);
+  if (range.first == range.second)
+    return;
+
+  const int size = I[range.first->second].size;
+  bool has_register = false;
+  bool has_spill = false;
+
+  sym->nRegs = size;
+  std::fill (sym->regs, sym->regs + size, static_cast<reg_info *> (NULL));
+  for (auto entry = range.first; entry != range.second; ++entry)
+    {
+      const var_t v = entry->second;
+      const reg_t reg = a.global[v];
+
+      if (reg >= 0)
+        {
+          sym->regs[I[v].byte] = k78k0_regs + reg;
+          has_register = true;
+        }
+      else
+        has_spill = true;
+    }
+
+  sym->isspilt = has_spill && !has_register;
+  sym->spillA = has_spill;
+  sym->stackSpil = has_spill && !sym->remat;
+}
+
+template <class G_t, class I_t>
+static void
+assign_operands_for_cost (const assignment &a, unsigned short i, const G_t &G,
+                          const I_t &I)
+{
+  const iCode *ic = G[i].ic;
+
+  if (ic->op == IFX)
+    assign_operand_for_cost (IC_COND (ic), a, i, G, I);
+  else if (ic->op == JUMPTABLE)
+    assign_operand_for_cost (IC_JTCOND (ic), a, i, G, I);
+  else
+    {
+      assign_operand_for_cost (IC_LEFT (ic), a, i, G, I);
+      assign_operand_for_cost (IC_RIGHT (ic), a, i, G, I);
+      assign_operand_for_cost (IC_RESULT (ic), a, i, G, I);
+    }
+
+  const iCode *next = ic->next;
+  if (next && next->op == '=' && !POINTER_SET (next) && IC_RESULT (ic) &&
+      IS_ITEMP (IC_RESULT (ic)) && IC_RIGHT (next) && IS_ITEMP (IC_RIGHT (next)) &&
+      OP_SYMBOL_CONST (IC_RESULT (ic)) == OP_SYMBOL_CONST (IC_RIGHT (next)))
+    {
+      const auto adjacent = adjacent_vertices (i, G);
+
+      for (auto node = adjacent.first; node != adjacent.second; ++node)
+        if (G[*node].ic == next)
+          {
+            assign_operand_for_cost (IC_RESULT (next), a, (unsigned short)*node, G, I);
+            break;
+          }
+    }
+
+  if (ic->op == SEND && ic->builtinSEND)
+    {
+      const auto adjacent = adjacent_vertices (i, G);
+
+      if (adjacent.first != adjacent.second)
+        assign_operands_for_cost (a, (unsigned short)*adjacent.first, G, I);
+    }
+}
+
+static bool
+assignment_does_not_matter (const iCode *ic)
+{
+  return ic->op == FUNCTION || ic->op == ENDFUNCTION || ic->op == LABEL ||
+    ic->op == GOTO || ic->op == INLINEASM;
 }
 
 template <class G_t, class I_t>
 static float
 instruction_cost (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
 {
+  iCode *ic = G[i].ic;
+
   if (!inst_sane (a, i, G, I))
     return std::numeric_limits<float>::infinity ();
+  if (ic->generated || assignment_does_not_matter (ic))
+    return 0.0f;
 
-  float cost = 0.0f;
-  const float frequency = std::max (1.0f, G[i].ic->count);
-  for (const auto &operand : G[i].operands)
-    if (a.global[operand.second] < 0)
-      cost += frequency * (I[operand.second].byte < 2 ? 2.0f : 1.0f);
+  assign_operands_for_cost (a, i, G, I);
+  set_surviving_regs (a, i, G, I);
+
+  const float cost = k78k0DryInstructionCost (ic);
+  ic->generated = false;
   return cost;
 }
 
@@ -218,44 +305,19 @@ template <class G_t, class I_t>
 static bool
 assignment_hopeless (const assignment &a, unsigned short, const G_t &, const I_t &I, const var_t lastvar)
 {
-  const int symbol_key = I[lastvar].v;
-  std::vector<reg_t> partial (I[lastvar].size, -2);
-  bool has_register = false, has_spill = false;
+  const unsigned size = I[lastvar].size;
+  const var_t first = lastvar - I[lastvar].byte;
+  register_layout layout (size, unknown_register);
 
-  for (var_t v : a.local)
-    if (I[v].v == symbol_key)
-      {
-        partial[I[v].byte] = a.global[v];
-        has_register |= a.global[v] >= 0;
-        has_spill |= a.global[v] < 0;
-      }
-
-  if (has_register && has_spill && partial.size () != 4)
-    return true;
-  if (!has_register || partial.size () == 1)
-    return false;
-
-  if (partial.size () == 2)
-    for (reg_t low = K78K0_RB0_X_IDX; low <= K78K0_RB0_E_IDX; low += 2)
-      if ((partial[0] == -2 || partial[0] == low) &&
-          (partial[1] == -2 || partial[1] == low + 1))
-        return false;
-  else if (partial.size () <= 4)
+  for (unsigned byte = 0; byte < size; byte++)
     {
-      for (unsigned byte = 0; byte < partial.size (); byte++)
-        if (partial[byte] >= 0 && partial[byte] != (reg_t)byte)
-          return true;
+      const var_t v = first + byte;
 
-      if (partial.size () == 4)
-        for (unsigned byte = 0; byte < 4; byte += 2)
-          if (partial[byte] != -2 && partial[byte + 1] != -2 &&
-              (partial[byte] < 0) != (partial[byte + 1] < 0))
-            return true;
-
-      return false;
+      if (std::binary_search (a.local.begin (), a.local.end (), v))
+        layout.bytes[byte] = a.global[v];
     }
 
-  return true;
+  return !layout_completable (layout);
 }
 
 template <class G_t, class I_t>
@@ -286,24 +348,36 @@ get_best_local_assignment_biased (assignment &a,
   a.local.swap (local);
 }
 
-static void extra_ic_generated (iCode *) {}
-
-template <class G_t, class I_t>
+/* Comparisons and GETABIT directly emit a following IFX branch. Keep the
+   fused boolean out of the conflict graph and do not cost the IFX twice. */
 static void
-set_surviving_regs (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
+extra_ic_generated (iCode *ic)
 {
-  iCode *ic = G[i].ic;
+  if (ic->op == CALL || ic->op == PCALL)
+    {
+      iCode *bridge = k78k0HiddenReturnForwardBridge (
+        ic, currFunc ? currFunc->type : NULL);
 
-  bitVectClear (ic->rMask);
-  bitVectClear (ic->rSurv);
-  for (var_t v : G[i].alive)
-    if (a.global[v] >= 0)
-      {
-        ic->rMask = bitVectSetBit (ic->rMask, a.global[v]);
-        if (G[i].dying.find (v) == G[i].dying.end () &&
-            !operand_is_symbol (IC_RESULT (ic), I[v].v))
-          ic->rSurv = bitVectSetBit (ic->rSurv, a.global[v]);
-      }
+      if (bridge)
+        {
+          bridge->generated = true;
+          if (bridge->op == ADDRESS_OF)
+            bridge->next->generated = true;
+        }
+    }
+
+  if (ic->op == EQ_OP || ic->op == NE_OP || ic->op == '<' || ic->op == '>' ||
+      ic->op == GETABIT)
+    {
+      iCode *ifx = ifxForOp (IC_RESULT (ic), ic);
+
+      if (ifx)
+        {
+          OP_SYMBOL (IC_RESULT (ic))->for_newralloc = false;
+          OP_SYMBOL (IC_RESULT (ic))->regType = REG_CND;
+          ifx->generated = true;
+        }
+    }
 }
 
 template <class T_t, class G_t, class I_t>
@@ -327,29 +401,38 @@ allocate (T_t &T, G_t &G, const I_t &I)
   bool optimal = true;
   const auto root = find_root (T);
   tree_dec_ralloc_nodes (T, root, G, conflicts, context, &optimal);
-  const assignment &winner = *T[root].assignments.begin ();
-
-  for (unsigned v = 0; v < variable_count; v++)
-    {
-      symbol *sym = static_cast<symbol *> (hTabItemWithKey (liveRanges, I[v].v));
-      const reg_t reg = winner.global[v];
-      sym->regs[I[v].byte] = reg >= 0 ? k78k0_regs + reg : NULL;
-      sym->nRegs = I[v].size;
-    }
+  assignment spill_fallback;
+  const assignment &winner = [&]() -> const assignment &
+  {
+    if (T[root].assignments.empty ())
+      {
+        /* An unsupported dry lowering gives every candidate infinite cost.
+           Keep compilation correct by falling back to virtual-stack storage. */
+        spill_fallback.global.resize (variable_count, -1);
+        return spill_fallback;
+      }
+    return *T[root].assignments.begin ();
+  }();
 
   for (unsigned v = 0; v < variable_count;)
     {
       symbol *sym = static_cast<symbol *> (hTabItemWithKey (liveRanges, I[v].v));
       const int size = I[v].size;
-      const auto first = winner.global.begin () + v;
-      const auto last = first + size;
+      bool spilled = false;
 
-      if (std::any_of (first, last, [](reg_t reg) { return reg < 0; }))
+      sym->nRegs = size;
+      for (int byte = 0; byte < size; byte++)
         {
-          k78k0SpillThis (sym, false);
-          if (size == 4 && std::any_of (first, last, [](reg_t reg) { return reg >= 0; }))
-            k78k0_partial_allocations = bitVectSetBit (k78k0_partial_allocations, sym->key);
+          const reg_t reg = winner.global[v + byte];
+
+          sym->regs[I[v + byte].byte] = reg >= 0 ? k78k0_regs + reg : NULL;
+          spilled |= reg < 0;
         }
+
+      if (spilled)
+        k78k0SpillThis (sym);
+      else
+        sym->isspilt = sym->spillA = sym->stackSpil = false;
       v += size;
     }
 

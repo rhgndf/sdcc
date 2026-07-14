@@ -12,6 +12,67 @@ union float_bits
 };
 
 static const unsigned char pointer_arg_data[] = {0x5a, 0xa5};
+static volatile __sfr __at (0xff80) high_sfr;
+
+struct shifted_bits
+{
+  unsigned int padding : 3;
+  unsigned int value : 10;
+};
+
+static unsigned char
+andHighSfr (unsigned char value)
+{
+  return value & high_sfr;
+}
+
+static unsigned char
+rematerializedAddress8 (void)
+{
+  return (unsigned char)(unsigned int)&pointer_arg_data[1];
+}
+
+static unsigned long
+rematerializedAddress32 (void)
+{
+  return (unsigned long)(unsigned int)&pointer_arg_data[1];
+}
+
+static unsigned long long
+rematerializedAddress64 (void)
+{
+  return (unsigned long long)(unsigned int)&pointer_arg_data[1];
+}
+
+static unsigned int
+divideWordByByte (unsigned int dividend, unsigned char divisor)
+{
+  return dividend / divisor;
+}
+
+static void
+storeWordThroughPointer (unsigned int *pointer, unsigned int value)
+{
+  *pointer = value;
+}
+
+static unsigned int
+shiftWordByWord (unsigned int value, unsigned int count)
+{
+  return value << count;
+}
+
+static unsigned int
+readShiftedBits (const struct shifted_bits *bits)
+{
+  return bits->value;
+}
+
+static void
+writeShiftedBits (struct shifted_bits *bits, unsigned int value)
+{
+  bits->value = value;
+}
 
 static unsigned char
 first8 (unsigned char first, unsigned char second)
@@ -583,8 +644,22 @@ testCallingConvention78K0 (void)
 {
 #ifdef __SDCC_78k0
   union float_bits negative_zero;
+  struct shifted_bits bits = {0, 0};
+  unsigned int stored_word = 0;
+  unsigned int pointer_address = (unsigned int)&pointer_arg_data[1];
 
   negative_zero.bits = 0x80000000ul;
+  high_sfr = 0x5a;
+  ASSERT (andHighSfr (0x3c) == 0x18);
+  ASSERT (rematerializedAddress8 () == (unsigned char)pointer_address);
+  ASSERT (rematerializedAddress32 () == (unsigned long)pointer_address);
+  ASSERT (rematerializedAddress64 () == (unsigned long long)pointer_address);
+  ASSERT (divideWordByByte (0x1234, 0x12) == 0x0102);
+  storeWordThroughPointer (&stored_word, 0x5aa5);
+  ASSERT (stored_word == 0x5aa5);
+  ASSERT (shiftWordByWord (0x1234, 4) == 0x2340);
+  writeShiftedBits (&bits, 0x02d5);
+  ASSERT (readShiftedBits (&bits) == 0x02d5);
   ASSERT (first8 (0xa5, 0x3c) == 0x99);
   ASSERT (first16 (0x1234, 0x56) == 0x128a);
   ASSERT (first24 ((uint24_t)0x123456ul, 0x78) == (uint24_t)0x1234ceul);

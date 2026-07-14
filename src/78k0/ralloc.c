@@ -15,7 +15,6 @@
 
 static int spill_slot_id;
 static set *spill_slots;
-bitVect *k78k0_partial_allocations;
 
 reg_info k78k0_regs[] =
 {
@@ -25,6 +24,8 @@ reg_info k78k0_regs[] =
   {REG_GPR, K78K0_RB0_B_IDX, "b"},
   {REG_GPR, K78K0_RB0_E_IDX, "e"},
   {REG_GPR, K78K0_RB0_D_IDX, "d"},
+  {REG_GPR, K78K0_RB0_L_IDX, "l"},
+  {REG_GPR, K78K0_RB0_H_IDX, "h"},
   {REG_CND, K78K0_PSW_IDX,   "psw"},
   {0,       K78K0_SP_IDX,    "sp"},
 };
@@ -67,8 +68,9 @@ markRematerializable (iCode *ic)
 }
 
 static symbol *
-createSpillSlot (symbol *sym, const int size)
+createSpillSlot (symbol *sym)
 {
+  const int size = getSize (sym->type);
   symbol *slot = NULL;
 
   for (symbol *candidate = setFirstItem (spill_slots); candidate;
@@ -115,19 +117,16 @@ createSpillSlot (symbol *sym, const int size)
 }
 
 void
-k78k0SpillThis (symbol *sym, bool force_spill)
+k78k0SpillThis (symbol *sym)
 {
-  const int size = getSize (sym->type);
-
   if (!sym->remat && !sym->usl.spillLoc)
-    sym->usl.spillLoc = createSpillSlot (sym, size);
+    sym->usl.spillLoc = createSpillSlot (sym);
 
   sym->isspilt = sym->spillA = 1;
   sym->stackSpil = !sym->remat;
 
-  if (force_spill)
-    for (int i = 0; i < sym->nRegs; i++)
-      sym->regs[i] = NULL;
+  for (int i = 0; i < sym->nRegs && i < K78K0_MAX_SCALAR_BYTES; i++)
+    sym->regs[i] = NULL;
 }
 
 static bool
@@ -137,52 +136,22 @@ operandUsesSymbol (const operand *op, const symbol *sym)
 }
 
 static bool
-isComparison (const int op)
+isRegisterSafeUse (const iCode *ic, const symbol *sym)
 {
-  return op == EQ_OP || op == NE_OP || op == '<' || op == '>';
+  const k78k0_instruction_traits traits = k78k0InstructionTraits (ic);
+  unsigned roles = 0;
+
+  if (operandUsesSymbol (IC_LEFT (ic), sym))
+    roles |= K78K0_ROLE_LEFT;
+  if (operandUsesSymbol (IC_RIGHT (ic), sym))
+    roles |= K78K0_ROLE_RIGHT;
+  if (operandUsesSymbol (IC_RESULT (ic), sym))
+    roles |= K78K0_ROLE_RESULT;
+  return (roles & traits.safe_roles) != 0;
 }
 
 static bool
-isRegisterSafeUse (const iCode *ic, const symbol *sym, const int size)
-{
-  const bool uses_left = operandUsesSymbol (IC_LEFT (ic), sym);
-  const bool uses_right = operandUsesSymbol (IC_RIGHT (ic), sym);
-
-  if (uses_left &&
-      (ic->op == RETURN || ic->op == SEND || ic->op == IPUSH || ic->op == '!' ||
-       ic->op == UNARYMINUS || ic->op == GETBYTE || ic->op == GETWORD || ic->op == GETABIT))
-    return true;
-  if (uses_right && ((ic->op == '=' && !POINTER_SET (ic)) || ic->op == CAST))
-    return true;
-  if (ic->op == IFX)
-    return operandUsesSymbol (IC_COND (ic), sym);
-
-  if (size == 1)
-    return (uses_left || uses_right) &&
-           (ic->op == '+' || ic->op == '-' || ic->op == '*' || ic->op == '/' || ic->op == '%' ||
-            ic->op == BITWISEAND || ic->op == '|' || ic->op == '^' || ic->op == LEFT_OP ||
-            ic->op == RIGHT_OP || ic->op == ROT || isComparison (ic->op));
-
-  if (size != 2)
-    return false;
-
-  if (ic->op == GET_VALUE_AT_ADDRESS || ic->op == SET_VALUE_AT_ADDRESS || ic->op == PCALL)
-    return uses_left;
-  if (ic->op == '+' || ic->op == '-')
-    return (uses_left && IS_OP_LITERAL (IC_RIGHT (ic))) ||
-           (ic->op == '+' && IS_OP_LITERAL (IC_LEFT (ic)) && uses_right);
-  if (ic->op == BITWISEAND || ic->op == '|' || ic->op == '^')
-    return uses_left || uses_right;
-  if (ic->op == '*')
-    return (uses_left && IS_OP_LITERAL (IC_RIGHT (ic)) && operandLitValueUll (IC_RIGHT (ic)) <= 255) ||
-           (uses_right && IS_OP_LITERAL (IC_LEFT (ic)) && operandLitValueUll (IC_LEFT (ic)) <= 255);
-  if (isComparison (ic->op))
-    return uses_left && IS_OP_LITERAL (IC_RIGHT (ic));
-  return POINTER_SET (ic) && operandUsesSymbol (IC_RESULT (ic), sym);
-}
-
-static bool
-hasRegisterSafeUses (const symbol *sym, const int size)
+hasRegisterSafeUses (const symbol *sym)
 {
   for (int key = 0; key < sym->uses->size; key++)
     {
@@ -190,7 +159,7 @@ hasRegisterSafeUses (const symbol *sym, const int size)
         continue;
       const iCode *ic = hTabItemWithKey (iCodehTab, key);
 
-      if (!ic || !isRegisterSafeUse (ic, sym, size))
+      if (!ic || !isRegisterSafeUse (ic, sym))
         return false;
     }
 
@@ -198,24 +167,13 @@ hasRegisterSafeUses (const symbol *sym, const int size)
 }
 
 static bool
-hasRegisterSafeDefinitions (const symbol *sym, const int size)
+isDirectlyForwardedHiddenResult (const symbol *sym)
 {
-  bool found = false;
+  if (!sym || !currFunc || bitVectnBitsOn (sym->defs) != 1)
+    return false;
 
-  for (int key = 0; key < sym->defs->size; key++)
-    {
-      if (!bitVectBitValue (sym->defs, key))
-        continue;
-      const iCode *ic = hTabItemWithKey (iCodehTab, key);
-
-      found = true;
-      /* Wide arithmetic still uses BC internally; only canonical ABI/copy results are safe. */
-      if (!ic || (size > 2 && ic->op != CALL && ic->op != PCALL &&
-                  (ic->op != '=' || POINTER_SET (ic))))
-        return false;
-    }
-
-  return found;
+  iCode *call = hTabItemWithKey (iCodehTab, bitVectFirstBit (sym->defs));
+  return call && k78k0HiddenReturnForwardBridge (call, currFunc->type);
 }
 
 void
@@ -225,8 +183,6 @@ k78k0_assignRegisters (ebbIndex *ebbi)
 
   deleteSet (&spill_slots);
   spill_slot_id = 0;
-  freeBitVect (k78k0_partial_allocations);
-  k78k0_partial_allocations = NULL;
 
   for (int i = 0; i < ebbi->count; i++)
     {
@@ -244,29 +200,36 @@ k78k0_assignRegisters (ebbIndex *ebbi)
 
       sym->nRegs = 0;
       sym->for_newralloc = 0;
-      if (!sym->isitmp || sym->regType == REG_CND || sym->remat || size < 1)
+      if (!sym->isitmp || sym->regType == REG_CND || sym->remat || size < 1 ||
+          size > K78K0_MAX_SCALAR_BYTES || IS_STRUCT (sym->type))
         continue;
 
       sym->nRegs = size;
       sym->regType = REG_GPR;
-      sym->for_newralloc = size <= 4 && sym->liveTo > sym->liveFrom &&
-                           hasRegisterSafeDefinitions (sym, size) && hasRegisterSafeUses (sym, size);
+      /* Wide lowerings use the fixed AX/BC result registers as scratch, so
+         keep values wider than a word in stack storage. */
+      sym->for_newralloc = size <= 2 && sym->liveTo > sym->liveFrom &&
+                           bitVectnBitsOn (sym->defs) && hasRegisterSafeUses (sym);
     }
 
   iCode *ic_head = k78k0_ralloc2_cc (ebbi);
 
   /* Hidden destinations need storage even when the call result itself is unused. */
   for (symbol *sym = hTabFirstItem (liveRanges, &key); sym; sym = hTabNextItem (liveRanges, &key))
-    if (sym->isitmp && !sym->remat && !sym->isspilt && !sym->regs[0] &&
-        sym->nRegs > 0 && (sym->liveTo > sym->liveFrom || sym->nRegs > 4 || IS_STRUCT (sym->type)))
-      k78k0SpillThis (sym, true);
+    {
+      const int size = getSize (sym->type);
+
+      if (sym->isitmp && sym->regType != REG_CND && size > 0 && !sym->remat &&
+          !sym->isspilt && !sym->regs[0] &&
+          (sym->liveTo > sym->liveFrom || size > 4 || IS_STRUCT (sym->type)))
+        if (!isDirectlyForwardedHiddenResult (sym))
+          k78k0SpillThis (sym);
+    }
 
   if (options.dump_i_code)
     dumpEbbsToFileExt (DUMP_RASSGN, ebbi);
 
   gen78K0Code (ic_head);
-  freeBitVect (k78k0_partial_allocations);
-  k78k0_partial_allocations = NULL;
   deleteSet (&spill_slots);
   spill_slot_id = 0;
 }

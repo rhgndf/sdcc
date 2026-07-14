@@ -145,28 +145,10 @@ immexpr (struct expr *e)
 }
 
 static void
-reject_unary_negative (void)
-{
-  char *p = ip;
-  int c;
-
-  /* ASxxxx sign-extends 16-bit constants, so -1 and 0xffff are identical
-   * after expr().  Preserve the target syntax distinction before parsing. */
-  do
-    c = getnb ();
-  while (c == '+' || c == '(');
-  ip = p;
-
-  if (c == '-')
-    address_error ("Negative values are not valid 78K0 addresses.");
-}
-
-static void
 addr16expr (struct expr *e)
 {
   if (getnb () != '!')
     qerr ();
-  reject_unary_negative ();
   expr (e, 0);
 }
 
@@ -178,13 +160,11 @@ direct_expr (struct expr *e)
 
   if (c == '!')
     {
-      reject_unary_negative ();
       expr (e, 0);
       return 1;
     }
 
   ip = p;
-  reject_unary_negative ();
   expr (e, 0);
   return 0;
 }
@@ -244,6 +224,8 @@ direct_class (const struct expr *e, int forced_addr16)
     {
       if (e->e_rlcf)
         address_error ("Byte selection is not valid for a 78K0 direct address.");
+      else
+        address_error ("Relocatable direct addresses require explicit addr16 syntax.");
       return K78K0_DIR_SADDR;
     }
 
@@ -287,8 +269,13 @@ emit_u8 (struct expr *value)
 static void
 emit_direct_address (struct expr *addr, int kind, int even)
 {
-  if (even && is_abs (addr) && (addr->e_addr & 1))
-    address_error ("78K0 word address must be even.");
+  if (even)
+    {
+      if (!is_abs (addr))
+        address_error ("Relocatable word addresses cannot be checked for even alignment.");
+      else if (addr->e_addr & 1)
+        address_error ("78K0 word address must be even.");
+    }
 
   if (kind == K78K0_DIR_ADDR16)
     outrw (addr, R_NORM);
@@ -506,7 +493,6 @@ bit_operand (void)
   else
     ip = p;
 
-  reject_unary_negative ();
   expr (&b.addr, 0);
   switch (direct_class (&b.addr, 0))
     {

@@ -13,12 +13,9 @@
 	mov	a,0x1fe20	; ERROR: out of range signed / unsigned value
 	movw	ax,0x1fe20	; ERROR: out of range signed / unsigned value
 
-	; ASxxxx sign-extends 0x8000..0xffff, so reject unary-negative syntax
-	; before folding while the equivalent explicit positive addresses remain
-	; covered by t78k0.asm.
-	mov	a,-1		; ERROR: Negative values are not valid 78K0 addresses
-	call	!-1		; ERROR: Negative values are not valid 78K0 addresses
 	mov	a,<external_address ; ERROR: Byte selection is not valid for a 78K0 direct address
+	mov	a,external_address ; ERROR: Relocatable direct addresses require explicit addr16 syntax
+	movw	ax,!external_address ; ERROR: Relocatable word addresses cannot be checked for even alignment
 
 	; A forced addr16 prefix is not part of any 78K0 bit-address grammar.
 	set1	!0xff80.0	; ERROR: Forced addr16 syntax is not valid for a 78K0 bit operand

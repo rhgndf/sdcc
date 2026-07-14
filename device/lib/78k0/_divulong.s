@@ -39,7 +39,7 @@ __divulong:
 	movw	sp,ax
 	movw	hl,ax
 	mov	a,#0x00
-	br	!__divmodulong
+	br	__divmodulong
 
 __modulong:
 	push	ax

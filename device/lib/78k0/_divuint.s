@@ -41,7 +41,7 @@ __divuint:
 	movw	sp,ax
 	movw	hl,ax
 	mov	a,#0x00
-	br	!__divmoduint
+	br	__divmoduint
 
 __moduint:
 	mov	b,a

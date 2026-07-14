@@ -35,7 +35,7 @@
 
 __divulonglong:
 	mov	a,#0x00
-	br	!__divmodulonglong
+	br	__divmodulonglong
 
 __modulonglong:
 	mov	a,#0x01
@@ -141,7 +141,7 @@ __divmodulonglong:
 
 __divslonglong:
 	mov	a,#0x00
-	br	!__divmodslonglong
+	br	__divmodslonglong
 
 __modslonglong:
 	mov	a,#0x01

@@ -43,7 +43,7 @@ __divsint:
 	movw	sp,ax
 	movw	hl,ax
 	mov	a,#0x00
-	br	!__divmodsint
+	br	__divmodsint
 
 __modsint:
 	mov	b,a

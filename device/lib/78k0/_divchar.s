@@ -40,31 +40,31 @@ __divschar:
 	mov	c,a
 	push	de
 	mov	a,#0x03
-	br	!__divchar_common
+	br	__divchar_common
 
 __divsuchar:
 	mov	c,a
 	push	de
 	mov	a,#0x01
-	br	!__divchar_common
+	br	__divchar_common
 
 __divuschar:
 	mov	c,a
 	push	de
 	mov	a,#0x02
-	br	!__divchar_common
+	br	__divchar_common
 
 __modschar:
 	mov	c,a
 	push	de
 	mov	a,#0x07
-	br	!__divchar_common
+	br	__divchar_common
 
 __modsuchar:
 	mov	c,a
 	push	de
 	mov	a,#0x05
-	br	!__divchar_common
+	br	__divchar_common
 
 __moduschar:
 	mov	c,a

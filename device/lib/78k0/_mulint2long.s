@@ -8,7 +8,7 @@
 ___muluint2ulong:
 	push	ax
 	mov	a,#0x00
-	br	!__mulint2long_common
+	br	__mulint2long_common
 
 ___mulsint2slong:
 	push	ax

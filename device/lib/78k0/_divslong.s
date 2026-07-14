@@ -41,7 +41,7 @@ __divslong:
 	movw	sp,ax
 	movw	hl,ax
 	mov	a,#0x00
-	br	!__divmodslong
+	br	__divmodslong
 
 __modslong:
 	push	ax

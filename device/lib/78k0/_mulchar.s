@@ -38,19 +38,19 @@ __muluchar:
 	mov	c,a
 	push	de
 	mov	a,#0x00
-	br	!__mulchar_common
+	br	__mulchar_common
 
 __mulschar:
 	mov	c,a
 	push	de
 	mov	a,#0x03
-	br	!__mulchar_common
+	br	__mulchar_common
 
 __mulsuchar:
 	mov	c,a
 	push	de
 	mov	a,#0x01
-	br	!__mulchar_common
+	br	__mulchar_common
 
 __muluschar:
 	mov	c,a

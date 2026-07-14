@@ -17,6 +17,18 @@ char *cpu = "78k0";
 char *dsft = "asm";
 
 static int
+get_identifier (char *id)
+{
+  int c = getnb ();
+
+  if ((ctype[c] & LETTER) == 0)
+    return 0;
+
+  getid (id, c);
+  return 1;
+}
+
+static int
 getreg (void)
 {
   static const char *const names[] = {
@@ -25,24 +37,18 @@ getreg (void)
   };
   char id[NCPS];
   char *p = ip;
-  int c = getnb ();
 
-  if ((ctype[c] & LETTER) == 0)
+  if (get_identifier (id))
     {
-      ip = p;
-      return -1;
+      for (int reg = 0; reg < (int)(sizeof (names) / sizeof (names[0])); reg++)
+        if (!strcmp (id, names[reg]))
+          return reg;
+
+      if (id[0] == 'r' && id[1] >= '0' && id[1] <= '7' && !id[2])
+        return id[1] - '0';
+      if (id[0] == 'r' && id[1] == 'p' && id[2] >= '0' && id[2] <= '3' && !id[3])
+        return K78K0_AX + (id[2] - '0');
     }
-
-  getid (id, c);
-
-  for (int reg = 0; reg < (int)(sizeof (names) / sizeof (names[0])); reg++)
-    if (!strcmp (id, names[reg]))
-      return reg;
-
-  if (id[0] == 'r' && id[1] >= '0' && id[1] <= '7' && !id[2])
-    return id[1] - '0';
-  if (id[0] == 'r' && id[1] == 'p' && id[2] >= '0' && id[2] <= '3' && !id[3])
-    return K78K0_AX + (id[2] - '0');
 
   ip = p;
   return -1;
@@ -65,17 +71,9 @@ getrb (void)
 {
   char id[NCPS];
   char *p = ip;
-  int c = getnb ();
 
-  if ((ctype[c] & LETTER) == 0)
-    {
-      ip = p;
-      return -1;
-    }
-
-  getid (id, c);
-
-  if (id[0] == 'r' && id[1] == 'b' && id[2] >= '0' && id[2] <= '3' && !id[3])
+  if (get_identifier (id) && id[0] == 'r' && id[1] == 'b' &&
+      id[2] >= '0' && id[2] <= '3' && !id[3])
     return id[2] - '0';
 
   ip = p;
@@ -134,14 +132,19 @@ expect_reg (int reg)
     qerr ();
 }
 
-static void address_error (const char *message);
-
-static void
-immexpr (struct expr *e)
+static int
+parse_immediate (struct expr *e)
 {
-  if (getnb () != '#')
-    qerr ();
+  int c = getnb ();
+
+  if (c != '#')
+    {
+      unget (c);
+      return 0;
+    }
+
   expr (e, 0);
+  return 1;
 }
 
 static void
@@ -150,23 +153,6 @@ addr16expr (struct expr *e)
   if (getnb () != '!')
     qerr ();
   expr (e, 0);
-}
-
-static int
-direct_expr (struct expr *e)
-{
-  char *p = ip;
-  int c = getnb ();
-
-  if (c == '!')
-    {
-      expr (e, 0);
-      return 1;
-    }
-
-  ip = p;
-  expr (e, 0);
-  return 0;
 }
 
 enum
@@ -181,12 +167,11 @@ canonical_addr16 (a_uint raw, a_uint *addr)
 {
   /* ASxxxx sign-extends values whose bit 15 is set.  Accept that canonical
    * representation, but not arbitrary values with nonzero upper bits. */
-  if (raw <= 0xffff)
-    *addr = raw;
-  else if ((raw & (a_uint)0xffff8000) == (a_uint)0xffff8000)
-    *addr = raw & 0xffff;
-  else
+  if (raw > 0xffff &&
+      (raw & (a_uint)0xffff8000) != (a_uint)0xffff8000)
     return 0;
+
+  *addr = raw & 0xffff;
   return 1;
 }
 
@@ -210,17 +195,17 @@ address_error (const char *message)
 }
 
 static int
-direct_class (const struct expr *e, int forced_addr16)
+direct_class (struct expr *e, int forced_addr16)
 {
   a_uint addr = 0;
 
   if (forced_addr16)
     {
-      if (is_abs ((struct expr *)e) && !canonical_addr16 (e->e_addr, &addr))
+      if (is_abs (e) && !canonical_addr16 (e->e_addr, &addr))
         address_error ("78K0 addr16 operand is outside 0x0000..0xffff.");
       return K78K0_DIR_ADDR16;
     }
-  if (!is_abs ((struct expr *)e))
+  if (!is_abs (e))
     {
       if (e->e_rlcf)
         address_error ("Byte selection is not valid for a 78K0 direct address.");
@@ -241,7 +226,13 @@ direct_class (const struct expr *e, int forced_addr16)
 static int
 parse_direct (struct expr *e)
 {
-  return direct_class (e, direct_expr (e));
+  char *p = ip;
+  int forced_addr16 = getnb () == '!';
+
+  if (!forced_addr16)
+    ip = p;
+  expr (e, 0);
+  return direct_class (e, forced_addr16);
 }
 
 static void
@@ -279,13 +270,10 @@ emit_direct_address (struct expr *addr, int kind, int even)
 static void
 emit_addr16 (struct expr *addr)
 {
-  if (is_abs (addr))
-    {
-      a_uint canonical;
+  a_uint canonical;
 
-      if (!canonical_addr16 (addr->e_addr, &canonical))
-        address_error ("78K0 addr16 operand is outside 0x0000..0xffff.");
-    }
+  if (is_abs (addr) && !canonical_addr16 (addr->e_addr, &canonical))
+    address_error ("78K0 addr16 operand is outside 0x0000..0xffff.");
   outrw (addr, R_NORM);
 }
 
@@ -436,7 +424,6 @@ bit_operand (void)
   char *p = ip;
   int c = getnb ();
 
-  b.type = K78K0_BIT_SADDR;
   b.bit = 0;
   clrexpr (&b.addr);
 
@@ -487,18 +474,8 @@ bit_operand (void)
     ip = p;
 
   expr (&b.addr, 0);
-  switch (direct_class (&b.addr, 0))
-    {
-    case K78K0_DIR_SADDR:
-      b.type = K78K0_BIT_SADDR;
-      break;
-    case K78K0_DIR_SFR:
-      b.type = K78K0_BIT_SFR;
-      break;
-    default:
-      qerr ();
-      break;
-    }
+  b.type = direct_class (&b.addr, 0) == K78K0_DIR_SFR ?
+    K78K0_BIT_SFR : K78K0_BIT_SADDR;
   b.bit = bit_number ();
   return b;
 }
@@ -544,12 +521,6 @@ emit_bit_to_cy (const struct bit_operand *b, int low)
       qerr ();
       break;
     }
-}
-
-static void
-emit_cy_to_bit (const struct bit_operand *b)
-{
-  emit_bit_to_cy (b, 0x01);
 }
 
 static void
@@ -631,7 +602,6 @@ emit_byte_alu (int addr16_opcode)
 {
   struct expr e;
   int c;
-  int kind;
   int dst;
 
   clrexpr (&e);
@@ -641,14 +611,12 @@ emit_byte_alu (int addr16_opcode)
   if (dst == K78K0_A)
     {
       comma (1);
-      c = getnb ();
-      if (c == '#')
+      if (parse_immediate (&e))
         {
-          expr (&e, 0);
           outab (addr16_opcode + 0x05);
           emit_u8 (&e);
         }
-      else if (c == '[')
+      else if ((c = getnb ()) == '[')
         {
           const int opcodes[] = {
             -1,
@@ -677,7 +645,7 @@ emit_byte_alu (int addr16_opcode)
           else
             {
               ip = p;
-              kind = parse_direct (&e);
+              const int kind = parse_direct (&e);
               emit_direct_opcode (&e, kind, 0, addr16_opcode, addr16_opcode + 0x06, -1);
             }
         }
@@ -693,18 +661,16 @@ emit_byte_alu (int addr16_opcode)
     }
   else if (dst < 0)
     {
-      struct expr addr;
       struct expr imm;
 
-      clrexpr (&addr);
       clrexpr (&imm);
       if (parse_direct (&e) != K78K0_DIR_SADDR)
         qerr ();
       comma (1);
-      addr = e;
-      immexpr (&imm);
+      if (!parse_immediate (&imm))
+        qerr ();
       outab (addr16_opcode + 0x80);
-      emit_direct_address (&addr, K78K0_DIR_SADDR, 0);
+      emit_direct_address (&e, K78K0_DIR_SADDR, 0);
       emit_u8 (&imm);
     }
   else
@@ -719,7 +685,8 @@ emit_ax_imm16 (int opcode)
   clrexpr (&e);
   expect_reg (K78K0_AX);
   comma (1);
-  immexpr (&e);
+  if (!parse_immediate (&e))
+    qerr ();
   outab (opcode);
   outrw (&e, R_NORM);
 }
@@ -784,7 +751,7 @@ machine (struct mne *mp)
             struct bit_operand src_bit = bit_operand ();
             if (src_bit.type != K78K0_BIT_CY)
               qerr ();
-            emit_cy_to_bit (&dst_bit);
+            emit_bit_to_cy (&dst_bit, 0x01);
           }
         else
           qerr ();
@@ -861,15 +828,12 @@ machine (struct mne *mp)
       if (dst == K78K0_A)
         {
           comma (1);
-          c = getnb ();
-
-          if (c == '#')
+          if (parse_immediate (&e))
             {
-              expr (&e, 0);
               outab (0xa1);
               emit_u8 (&e);
             }
-          else if (c == '[')
+          else if ((c = getnb ()) == '[')
             {
               unget ('[');
               emit_memory_opcode (bracket_operand (&e), &e, mov_a_from_memory);
@@ -900,16 +864,13 @@ machine (struct mne *mp)
       else if (dst == K78K0_PSW)
         {
           comma (1);
-          c = getnb ();
-          if (c == '#')
+          if (parse_immediate (&e))
             {
-              expr (&e, 0);
               emit_opcode (0x111e);
               emit_u8 (&e);
             }
           else
             {
-              unget (c);
               expect_reg (K78K0_A);
               emit_opcode (0xf21e);
             }
@@ -917,23 +878,23 @@ machine (struct mne *mp)
       else if (is_byte_reg_except_a (dst))
         {
           comma (1);
-          c = getnb ();
-          if (c == '#')
+          if (parse_immediate (&e))
             {
-              expr (&e, 0);
               outab (0xa0 + dst);
               emit_u8 (&e);
             }
           else
             {
-              unget (c);
               expect_reg (K78K0_A);
               outab (0x70 + dst);
             }
         }
       else if (dst < 0)
         {
-          int c = getnb ();
+          struct expr addr, imm;
+          int kind;
+
+          c = getnb ();
 
           if (c == '[')
             {
@@ -945,32 +906,23 @@ machine (struct mne *mp)
             }
 
           unget (c);
-          {
-            struct expr addr;
-            struct expr imm;
-            int kind;
-
-            clrexpr (&addr);
-            clrexpr (&imm);
-            kind = parse_direct (&addr);
-            comma (1);
-            c = getnb ();
-            if (c == '#')
-              {
-                expr (&imm, 0);
-                if (kind == K78K0_DIR_ADDR16)
-                  qerr ();
-                outab (kind == K78K0_DIR_SADDR ? 0x11 : 0x13);
-                emit_direct_address (&addr, kind, 0);
-                emit_u8 (&imm);
-              }
-            else
-              {
-                unget (c);
-                expect_reg (K78K0_A);
-                emit_direct_opcode (&addr, kind, 0, 0x9e, 0xf2, 0xf6);
-              }
-          }
+          clrexpr (&addr);
+          clrexpr (&imm);
+          kind = parse_direct (&addr);
+          comma (1);
+          if (parse_immediate (&imm))
+            {
+              if (kind == K78K0_DIR_ADDR16)
+                qerr ();
+              outab (kind == K78K0_DIR_SADDR ? 0x11 : 0x13);
+              emit_direct_address (&addr, kind, 0);
+              emit_u8 (&imm);
+            }
+          else
+            {
+              expect_reg (K78K0_A);
+              emit_direct_opcode (&addr, kind, 0, 0x9e, 0xf2, 0xf6);
+            }
         }
       else
         qerr ();
@@ -981,18 +933,13 @@ machine (struct mne *mp)
 
       if (dst >= 0)
         {
-          char *sp = ip;
-
           comma (1);
           src = getreg ();
 
           if (src < 0)
             {
-              c = getnb ();
-              if (c == '#')
+              if (parse_immediate (&e))
                 {
-                  expr (&e, 0);
-
                   if ((c = regpair_code (dst)) >= 0)
                     outab (0x10 + (c << 1));
                   else if (dst == K78K0_SP)
@@ -1008,8 +955,6 @@ machine (struct mne *mp)
                 {
                   int kind;
 
-                  ip = sp;
-                  comma (1);
                   kind = parse_direct (&e);
                   emit_direct_opcode (&e, kind, 1, 0x02, 0x89, 0xa9);
                 }
@@ -1029,18 +974,15 @@ machine (struct mne *mp)
         }
       else
         {
-          struct expr addr;
-          struct expr imm;
+          struct expr addr, imm;
           int kind;
 
           clrexpr (&addr);
           clrexpr (&imm);
           kind = parse_direct (&addr);
           comma (1);
-          c = getnb ();
-          if (c == '#')
+          if (parse_immediate (&imm))
             {
-              expr (&imm, 0);
               if (kind == K78K0_DIR_ADDR16)
                 qerr ();
               outab (kind == K78K0_DIR_SADDR ? 0xee : 0xfe);
@@ -1049,7 +991,6 @@ machine (struct mne *mp)
             }
           else
             {
-              unget (c);
               expect_reg (K78K0_AX);
               emit_direct_opcode (&addr, kind, 1, 0x03, 0x99, 0xb9);
             }

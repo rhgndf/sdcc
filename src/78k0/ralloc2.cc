@@ -123,30 +123,28 @@ static bool
 inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
 {
   const iCode *ic = G[i].ic;
+  const bool left_spilled = operand_is_spilled (IC_LEFT (ic), a, i, G);
+  const bool right_spilled = operand_is_spilled (IC_RIGHT (ic), a, i, G);
+  const bool result_spilled = operand_is_spilled (IC_RESULT (ic), a, i, G);
   const bool stack_uses_hl = ic->op == ADDRESS_OF ?
-    operand_is_spilled (IC_RESULT (ic), a, i, G) :
-    operand_is_spilled (IC_LEFT (ic), a, i, G) ||
-    operand_is_spilled (IC_RIGHT (ic), a, i, G) ||
-    operand_is_spilled (IC_RESULT (ic), a, i, G);
+    result_spilled : left_spilled || right_spilled || result_spilled;
   k78k0_instruction_traits constraints = k78k0InstructionTraits (ic);
 
-  if (operand_is_spilled (IC_RIGHT (ic), a, i, G))
+  if (right_spilled)
     constraints.left |= constraints.left_if_right_spilled;
-  if (operand_is_spilled (IC_LEFT (ic), a, i, G))
+  if (left_spilled)
     constraints.right |= constraints.right_if_left_spilled;
 
   const unsigned clobbers = constraints.clobbers |
     (stack_uses_hl ? K78K0_MASK_HL : 0);
+  const unsigned hl_clobbers = clobbers & K78K0_MASK_HL;
 
   /* HL is the backend's stack and pointer scratch pair. Dying inputs need an
      explicit restriction because the survivor check below does not cover them. */
-  if (clobbers & K78K0_MASK_HL)
-    {
-      constraints.left |= K78K0_MASK_HL;
-      constraints.right |= K78K0_MASK_HL;
-      if (POINTER_SET (ic))
-        constraints.result |= K78K0_MASK_HL;
-    }
+  constraints.left |= hl_clobbers;
+  constraints.right |= hl_clobbers;
+  if (POINTER_SET (ic))
+    constraints.result |= hl_clobbers;
 
   if (!operand_sane (IC_LEFT (ic), constraints.left, a, i, G, I) ||
       !operand_sane (IC_RIGHT (ic), constraints.right, a, i, G, I) ||
@@ -204,13 +202,9 @@ assign_operand_for_cost (operand *op, const assignment &a, unsigned short i,
       const var_t v = entry->second;
       const reg_t reg = a.global[v];
 
-      if (reg >= 0)
-        {
-          sym->regs[I[v].byte] = k78k0_regs + reg;
-          has_register = true;
-        }
-      else
-        has_spill = true;
+      sym->regs[I[v].byte] = reg >= 0 ? k78k0_regs + reg : NULL;
+      has_register |= reg >= 0;
+      has_spill |= reg < 0;
     }
 
   sym->isspilt = has_spill && !has_register;
@@ -341,23 +335,18 @@ extra_ic_generated (iCode *ic)
 {
   if (ic->op == CALL || ic->op == PCALL)
     {
-      iCode *bridge = k78k0HiddenReturnForwardBridge (
-        ic, currFunc ? currFunc->type : NULL);
-
-      if (bridge)
+      if (iCode *bridge = k78k0HiddenReturnForwardBridge (
+            ic, currFunc ? currFunc->type : NULL))
         {
           bridge->generated = true;
           if (bridge->op == ADDRESS_OF)
             bridge->next->generated = true;
         }
     }
-
-  if (ic->op == EQ_OP || ic->op == NE_OP || ic->op == '<' || ic->op == '>' ||
-      ic->op == GETABIT)
+  else if (ic->op == EQ_OP || ic->op == NE_OP || ic->op == '<' ||
+           ic->op == '>' || ic->op == GETABIT)
     {
-      iCode *ifx = ifxForOp (IC_RESULT (ic), ic);
-
-      if (ifx)
+      if (iCode *ifx = ifxForOp (IC_RESULT (ic), ic))
         {
           OP_SYMBOL (IC_RESULT (ic))->for_newralloc = false;
           OP_SYMBOL (IC_RESULT (ic))->regType = REG_CND;
@@ -408,7 +397,7 @@ allocate (T_t &T, G_t &G, const I_t &I)
         {
           const reg_t reg = winner.global[v + byte];
 
-          sym->regs[I[v + byte].byte] = reg >= 0 ? k78k0_regs + reg : NULL;
+          sym->regs[byte] = reg >= 0 ? k78k0_regs + reg : NULL;
           spilled |= reg < 0;
         }
 

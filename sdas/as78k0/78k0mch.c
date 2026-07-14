@@ -134,6 +134,8 @@ expect_reg (int reg)
     qerr ();
 }
 
+static void address_error (const char *message);
+
 static void
 immexpr (struct expr *e)
 {
@@ -143,10 +145,28 @@ immexpr (struct expr *e)
 }
 
 static void
+reject_unary_negative (void)
+{
+  char *p = ip;
+  int c;
+
+  /* ASxxxx sign-extends 16-bit constants, so -1 and 0xffff are identical
+   * after expr().  Preserve the target syntax distinction before parsing. */
+  do
+    c = getnb ();
+  while (c == '+' || c == '(');
+  ip = p;
+
+  if (c == '-')
+    address_error ("Negative values are not valid 78K0 addresses.");
+}
+
+static void
 addr16expr (struct expr *e)
 {
   if (getnb () != '!')
     qerr ();
+  reject_unary_negative ();
   expr (e, 0);
 }
 
@@ -158,11 +178,13 @@ direct_expr (struct expr *e)
 
   if (c == '!')
     {
+      reject_unary_negative ();
       expr (e, 0);
       return 1;
     }
 
   ip = p;
+  reject_unary_negative ();
   expr (e, 0);
   return 0;
 }
@@ -175,22 +197,64 @@ enum
 };
 
 static int
+canonical_addr16 (a_uint raw, a_uint *addr)
+{
+  /* ASxxxx sign-extends values whose bit 15 is set.  Accept that canonical
+   * representation, but not arbitrary values with nonzero upper bits. */
+  if (raw <= 0xffff)
+    *addr = raw;
+  else if ((raw & (a_uint)0xffff8000) == (a_uint)0xffff8000)
+    *addr = raw & 0xffff;
+  else
+    return 0;
+  return 1;
+}
+
+static int
+is_saddr_value (a_uint addr)
+{
+  return addr >= 0xfe20 && addr <= 0xff1f;
+}
+
+static int
+is_sfr_value (a_uint addr)
+{
+  return (addr >= 0xff00 && addr <= 0xffcf) ||
+    (addr >= 0xffe0 && addr <= 0xffff);
+}
+
+static void
+address_error (const char *message)
+{
+  xerr ('q', (char *)message);
+}
+
+static int
 direct_class (const struct expr *e, int forced_addr16)
 {
-  a_uint addr;
+  a_uint addr = 0;
 
   if (forced_addr16)
-    return K78K0_DIR_ADDR16;
+    {
+      if (is_abs ((struct expr *)e) && !canonical_addr16 (e->e_addr, &addr))
+        address_error ("78K0 addr16 operand is outside 0x0000..0xffff.");
+      return K78K0_DIR_ADDR16;
+    }
   if (!is_abs ((struct expr *)e))
-    return K78K0_DIR_SADDR;
+    {
+      if (e->e_rlcf)
+        address_error ("Byte selection is not valid for a 78K0 direct address.");
+      return K78K0_DIR_SADDR;
+    }
 
-  addr = e->e_addr & 0xffff;
-  if (addr <= 0xff || (addr >= 0xfe20 && addr <= 0xff1f))
+  if (!canonical_addr16 (e->e_addr, &addr))
+    address_error ("78K0 direct address is outside the 16-bit address space.");
+  if (is_saddr_value (addr))
     return K78K0_DIR_SADDR;
-  if (addr >= 0xff00)
+  if (is_sfr_value (addr))
     return K78K0_DIR_SFR;
 
-  qerr ();
+  address_error ("78K0 direct address is neither an saddr nor an SFR.");
   return K78K0_DIR_SADDR;
 }
 
@@ -209,7 +273,45 @@ emit_opcode (int opcode)
 }
 
 static void
-emit_direct_opcode (struct expr *addr, int kind, int addr16_opcode, int saddr_opcode, int sfr_opcode)
+emit_u8 (struct expr *value)
+{
+  if (is_abs (value) && value->e_addr > 0xff)
+    address_error ("78K0 byte operand is outside 0x00..0xff.");
+
+  /* Explicit <symbol and >symbol extraction already constrains the result
+   * to one byte; checking the full symbol address as an unsigned byte would
+   * reject valid extraction at link time. */
+  outrb (value, value->e_rlcf & R_BYTX ? R_NORM : R_USGN);
+}
+
+static void
+emit_direct_address (struct expr *addr, int kind, int even)
+{
+  if (even && is_abs (addr) && (addr->e_addr & 1))
+    address_error ("78K0 word address must be even.");
+
+  if (kind == K78K0_DIR_ADDR16)
+    outrw (addr, R_NORM);
+  else
+    outrb (addr, R_NORM);
+}
+
+static void
+emit_addr16 (struct expr *addr)
+{
+  if (is_abs (addr))
+    {
+      a_uint canonical;
+
+      if (!canonical_addr16 (addr->e_addr, &canonical))
+        address_error ("78K0 addr16 operand is outside 0x0000..0xffff.");
+    }
+  outrw (addr, R_NORM);
+}
+
+static void
+emit_direct_opcode (struct expr *addr, int kind, int even,
+                    int addr16_opcode, int saddr_opcode, int sfr_opcode)
 {
   const int opcode = kind == K78K0_DIR_ADDR16 ? addr16_opcode :
     kind == K78K0_DIR_SADDR ? saddr_opcode : sfr_opcode;
@@ -221,17 +323,7 @@ emit_direct_opcode (struct expr *addr, int kind, int addr16_opcode, int saddr_op
     }
 
   outab (opcode);
-  if (kind == K78K0_DIR_ADDR16)
-    outrw (addr, R_NORM);
-  else
-    outrb (addr, R_USGN);
-}
-
-static void
-check_even_direct (const struct expr *e)
-{
-  if (is_abs ((struct expr *)e) && (e->e_addr & 1))
-    qerr ();
+  emit_direct_address (addr, kind, even);
 }
 
 static void
@@ -320,7 +412,7 @@ emit_memory_opcode (int kind, struct expr *index, const int opcodes[])
 
   emit_opcode (opcodes[kind]);
   if (kind == K78K0_MEM_HL_INDEX)
-    outrb (index, R_USGN);
+    emit_u8 (index);
 }
 
 static const int mov_a_from_memory[] = { 0x85, 0x87, 0xae, 0xab, 0xaa };
@@ -379,12 +471,7 @@ bit_operand (void)
     }
 
   if (c == '!')
-    {
-      expr (&b.addr, 0);
-      b.type = K78K0_BIT_SFR;
-      b.bit = bit_number ();
-      return b;
-    }
+    address_error ("Forced addr16 syntax is not valid for a 78K0 bit operand.");
 
   if (ctype[c] & LETTER)
     {
@@ -419,6 +506,7 @@ bit_operand (void)
   else
     ip = p;
 
+  reject_unary_negative ();
   expr (&b.addr, 0);
   switch (direct_class (&b.addr, 0))
     {
@@ -441,8 +529,12 @@ emit_bit_addr (const struct bit_operand *b)
 {
   if (b->type == K78K0_BIT_PSW)
     outab (0x1e);
+  else if (b->type == K78K0_BIT_SADDR)
+    emit_direct_address ((struct expr *)&b->addr, K78K0_DIR_SADDR, 0);
+  else if (b->type == K78K0_BIT_SFR)
+    emit_direct_address ((struct expr *)&b->addr, K78K0_DIR_SFR, 0);
   else
-    outrb ((struct expr *)&b->addr, R_USGN);
+    qerr ();
 }
 
 static void
@@ -575,7 +667,7 @@ emit_byte_alu (int addr16_opcode)
         {
           expr (&e, 0);
           outab (addr16_opcode + 0x05);
-          outrb (&e, R_USGN);
+          emit_u8 (&e);
         }
       else if (c == '[')
         {
@@ -607,7 +699,7 @@ emit_byte_alu (int addr16_opcode)
             {
               ip = p;
               kind = parse_direct (&e);
-              emit_direct_opcode (&e, kind, addr16_opcode, addr16_opcode + 0x06, -1);
+              emit_direct_opcode (&e, kind, 0, addr16_opcode, addr16_opcode + 0x06, -1);
             }
         }
     }
@@ -633,8 +725,8 @@ emit_byte_alu (int addr16_opcode)
       addr = e;
       immexpr (&imm);
       outab (addr16_opcode + 0x80);
-      outrb (&addr, R_USGN);
-      outrb (&imm, R_USGN);
+      emit_direct_address (&addr, K78K0_DIR_SADDR, 0);
+      emit_u8 (&imm);
     }
   else
     qerr ();
@@ -753,7 +845,7 @@ machine (struct mne *mp)
             qerr ();
           comma (1);
           outab (0x04);
-          outrb (&e, R_USGN);
+          emit_direct_address (&e, K78K0_DIR_SADDR, 0);
           expr (&e, 0);
           emit_relative_byte (&e);
         }
@@ -770,7 +862,7 @@ machine (struct mne *mp)
           if (parse_direct (&e) != K78K0_DIR_SADDR)
             qerr ();
           outab (mp->m_valu & 0xff);
-          outrb (&e, R_USGN);
+          emit_direct_address (&e, K78K0_DIR_SADDR, 0);
         }
       break;
 
@@ -796,7 +888,7 @@ machine (struct mne *mp)
             {
               expr (&e, 0);
               outab (0xa1);
-              outrb (&e, R_USGN);
+              emit_u8 (&e);
             }
           else if (c == '[')
             {
@@ -820,7 +912,7 @@ machine (struct mne *mp)
 
                   ip = p;
                   kind = parse_direct (&e);
-                  emit_direct_opcode (&e, kind, 0x8e, 0xf0, 0xf4);
+                  emit_direct_opcode (&e, kind, 0, 0x8e, 0xf0, 0xf4);
                 }
               else
                 qerr ();
@@ -834,7 +926,7 @@ machine (struct mne *mp)
             {
               expr (&e, 0);
               emit_opcode (0x111e);
-              outrb (&e, R_USGN);
+              emit_u8 (&e);
             }
           else
             {
@@ -851,7 +943,7 @@ machine (struct mne *mp)
             {
               expr (&e, 0);
               outab (0xa0 + dst);
-              outrb (&e, R_USGN);
+              emit_u8 (&e);
             }
           else
             {
@@ -890,14 +982,14 @@ machine (struct mne *mp)
                 if (kind == K78K0_DIR_ADDR16)
                   qerr ();
                 outab (kind == K78K0_DIR_SADDR ? 0x11 : 0x13);
-                outrb (&addr, R_USGN);
-                outrb (&imm, R_USGN);
+                emit_direct_address (&addr, kind, 0);
+                emit_u8 (&imm);
               }
             else
               {
                 unget (c);
                 expect_reg (K78K0_A);
-                emit_direct_opcode (&addr, kind, 0x9e, 0xf2, 0xf6);
+                emit_direct_opcode (&addr, kind, 0, 0x9e, 0xf2, 0xf6);
               }
           }
         }
@@ -940,8 +1032,7 @@ machine (struct mne *mp)
                   ip = sp;
                   comma (1);
                   kind = parse_direct (&e);
-                  check_even_direct (&e);
-                  emit_direct_opcode (&e, kind, 0x02, 0x89, 0xa9);
+                  emit_direct_opcode (&e, kind, 1, 0x02, 0x89, 0xa9);
                 }
               else
                 qerr ();
@@ -966,7 +1057,6 @@ machine (struct mne *mp)
           clrexpr (&addr);
           clrexpr (&imm);
           kind = parse_direct (&addr);
-          check_even_direct (&addr);
           comma (1);
           c = getnb ();
           if (c == '#')
@@ -975,14 +1065,14 @@ machine (struct mne *mp)
               if (kind == K78K0_DIR_ADDR16)
                 qerr ();
               outab (kind == K78K0_DIR_SADDR ? 0xee : 0xfe);
-              outrb (&addr, R_USGN);
+              emit_direct_address (&addr, kind, 1);
               outrw (&imm, R_NORM);
             }
           else
             {
               unget (c);
               expect_reg (K78K0_AX);
-              emit_direct_opcode (&addr, kind, 0x03, 0x99, 0xb9);
+              emit_direct_opcode (&addr, kind, 1, 0x03, 0x99, 0xb9);
             }
         }
       break;
@@ -1022,7 +1112,7 @@ machine (struct mne *mp)
             {
               addr16expr (&e);
               outab (0x9b);
-              outrw (&e, R_NORM);
+              emit_addr16 (&e);
             }
           else
             {
@@ -1036,7 +1126,7 @@ machine (struct mne *mp)
     case S_78K0_CALL:
       addr16expr (&e);
       outab (0x9a);
-      outrw (&e, R_NORM);
+      emit_addr16 (&e);
       break;
 
     case S_78K0_CALLF:
@@ -1088,7 +1178,7 @@ machine (struct mne *mp)
 
               ip = p;
               kind = parse_direct (&e);
-              emit_direct_opcode (&e, kind, 0xce, 0x83, 0x93);
+              emit_direct_opcode (&e, kind, 0, 0xce, 0x83, 0x93);
             }
         }
       break;
@@ -1114,4 +1204,5 @@ machine (struct mne *mp)
 VOID
 minit (void)
 {
+  vflag = 1;
 }

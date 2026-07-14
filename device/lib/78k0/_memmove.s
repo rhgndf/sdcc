@@ -82,7 +82,7 @@ _memmove:
 	incw	hl
 	dbnz	c,00002$
 	dbnz	b,00002$
-	br	!00006$
+	br	00006$
 
 00003$:
 	; Point HL and DE one byte past their ranges using the original count.

@@ -153,7 +153,7 @@ __divmodslong:
 	mov	x,a
 	mov	a,[hl+0x01]
 	call	!__divulong
-	br	!00005$
+	br	00005$
 00004$:
 	mov	a,[hl+0x02]
 	mov	c,a

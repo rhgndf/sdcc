@@ -1,7 +1,6 @@
 # Regression test specification for the 78K0 target running with k0emu
 
-K0EMU_DIR ?= $(top_srcdir)/../../k0emu
-EMU = $(PYTHON) $(PORTS_DIR)/$(PORT_BASE)/run.py --k0emu-dir $(K0EMU_DIR)
+EMU = uv --with 'k0emu==2.0.0' --with 'k0dasm==1.0.1' python $(PORTS_DIR)/$(PORT_BASE)/run.py
 EMU_INPUT =
 
 ifdef SDCC_BIN_PATH

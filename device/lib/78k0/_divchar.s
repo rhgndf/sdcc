@@ -130,7 +130,7 @@ __divchar_common:
 	mov	x,a
 	mov	a,#0x00
 	subc	a,#0x00
-	br	!00006$
+	br	00006$
 
 00005$:
 	mov	a,#0x00

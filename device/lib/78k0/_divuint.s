@@ -85,13 +85,13 @@ __divmoduint:
 	cmp	a,#0x00
 	bnz	00007$
 	mov	a,b
-	br	!00005$
+	br	00005$
 
 00007$:
 	mov	a,c
 	mov	x,a
 	mov	a,#0x00
-	br	!00005$
+	br	00005$
 
 00006$:
 	; A divisor of at least 256 can produce only an 8-bit quotient. Seed the
@@ -149,7 +149,7 @@ __divmoduint:
 	mov	a,[hl]
 	mov	x,a
 	mov	a,[hl+0x01]
-	br	!00005$
+	br	00005$
 
 00004$:
 	mov	a,[hl+0x02]

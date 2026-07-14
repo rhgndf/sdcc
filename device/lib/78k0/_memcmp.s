@@ -63,7 +63,7 @@ _memcmp:
 	incw	hl
 	incw	de
 	decw	bc
-	br	!00001$
+	br	00001$
 
 00002$:
 	sub	a,x
@@ -71,7 +71,7 @@ _memcmp:
 	mov	a,#0x00
 	subc	a,#0x00
 	movw	bc,ax
-	br	!00004$
+	br	00004$
 
 00003$:
 	movw	bc,#0x0000

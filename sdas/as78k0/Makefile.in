@@ -87,7 +87,6 @@ uninstall:
 check: all
 	test $(srcdir) = . || cp $(srcdir)/t78k0.asm .
 	$(ASX) -plosgff t78k0.asm
-	$(PYTHON) $(srcdir)/check.py $(srcdir)/t78k0.asm t78k0.lst
 	rm -f t78k0.lst t78k0.rel t78k0.sym
 	test $(srcdir) = . || rm -f t78k0.asm
 

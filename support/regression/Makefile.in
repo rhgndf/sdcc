@@ -161,7 +161,6 @@ EXCLUDE_PORTS += \
 
 # simulator may be unavailable
 EXCLUDE_PORTS += \
-	78k0 \
 	mos6502 \
 	mos6502-stack-auto
 
@@ -475,4 +474,3 @@ random-test-% : export EXCLUDE_extra = $(EXCLUDE_ds390) $(EXCLUDE_f8) $(EXCLUDE_
 random-test-%: $(TMP_DIR)/randport
 	cd $(srcdir); $(CURDIR)/$(TMP_DIR)/randport $*
 	$(MAKE) test-random-$*
-

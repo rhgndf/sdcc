@@ -1032,6 +1032,7 @@ sdcc ${VERSION} is now configured for
     mos65c02            ${enable_mos65c02_port}
     f8                  ${enable_f8_port}
     f8l                 ${enable_f8l_port}
+    78k0                ${enable_78k0_port}
 
   Disable non-free lib: ${OPT_DISABLE_NON_FREE}
   Disable packihx:      ${OPT_DISABLE_PACKIHX}

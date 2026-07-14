@@ -140,7 +140,7 @@ __divmodulong:
 	mov	[hl+0x03],a
 	bc	00010$
 	dbnz	b,00009$
-	br	!00005$
+	br	00005$
 
 00001$:
 	clr1	cy
@@ -211,7 +211,7 @@ __divmodulong:
 	cmp	a,#0x00
 	bnz	00004$
 
-	br	!00005$
+	br	00005$
 
 00004$:
 	mov	a,[hl+0x04]

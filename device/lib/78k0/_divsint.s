@@ -64,7 +64,7 @@ __divmodsint:
 	mov	a,b
 	xor	a,[hl+0x0b]
 	and	a,#0x80
-	br	!00002$
+	br	00002$
 
 00001$:
 	mov	a,b
@@ -119,7 +119,7 @@ __divmodsint:
 	mov	x,a
 	mov	a,[hl+0x03]
 	divuw	c
-	br	!00006$
+	br	00006$
 
 00010$:
 	mov	a,[hl+0x02]
@@ -129,7 +129,7 @@ __divmodsint:
 	mov	a,c
 	mov	x,a
 	mov	a,#0x00
-	br	!00006$
+	br	00006$
 
 00009$:
 	mov	a,[hl+0x04]
@@ -144,7 +144,7 @@ __divmodsint:
 	mov	x,a
 	mov	a,[hl+0x03]
 	call	!__divuint
-	br	!00006$
+	br	00006$
 
 00005$:
 	mov	a,[hl+0x02]
@@ -165,7 +165,7 @@ __divmodsint:
 	mov	a,c
 	mov	x,a
 	mov	a,b
-	br	!00008$
+	br	00008$
 
 00007$:
 	mov	a,c

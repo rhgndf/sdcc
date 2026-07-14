@@ -100,7 +100,7 @@ __divmodulonglong:
 	bnz	00104$
 	movw	ax,hl
 	movw	de,ax
-	br	!00105$
+	br	00105$
 
 00104$:
 	movw	ax,hl
@@ -319,7 +319,7 @@ __divmodslonglong:
 00207$:
 	movw	ax,hl
 	movw	de,ax
-	br	!00210$
+	br	00210$
 
 00208$:
 	mov	a,[hl+0x19]

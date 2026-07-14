@@ -40,7 +40,7 @@ _strlen:
 	bz	00002$
 	incw	hl
 	incw	bc
-	br	!00001$
+	br	00001$
 
 00002$:
 	movw	ax,bc

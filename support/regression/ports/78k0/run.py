@@ -3,54 +3,11 @@
 
 import argparse
 import sys
+from collections import deque
 from pathlib import Path
 
 
 SIMIF_ADDRESS = 0xFF00
-
-
-def parse_ihx(path):
-    image = {}
-    upper = 0
-
-    with path.open(encoding="ascii") as source:
-        for line_number, line in enumerate(source, 1):
-            line = line.strip()
-            if not line:
-                continue
-            if not line.startswith(":"):
-                raise ValueError(f"{path}:{line_number}: malformed Intel HEX record")
-
-            record = bytes.fromhex(line[1:])
-            if len(record) < 5 or len(record) != record[0] + 5 or sum(record) & 0xFF:
-                raise ValueError(f"{path}:{line_number}: invalid Intel HEX record")
-
-            count = record[0]
-            address = (record[1] << 8) | record[2]
-            record_type = record[3]
-            data = record[4:4 + count]
-
-            if record_type == 0x00:
-                base = upper + address
-                if base + count > 0x10000:
-                    raise ValueError(f"{path}:{line_number}: data lies outside 78K0 memory")
-                for offset, value in enumerate(data):
-                    data_address = base + offset
-                    if data_address in image:
-                        raise ValueError(
-                            f"{path}:{line_number}: data overlaps address 0x{data_address:04x}"
-                        )
-                    image[data_address] = value
-            elif record_type == 0x01:
-                break
-            elif record_type == 0x02:
-                upper = int.from_bytes(data, "big") << 4
-            elif record_type == 0x04:
-                upper = int.from_bytes(data, "big") << 16
-            elif record_type not in (0x03, 0x05):
-                raise ValueError(f"{path}:{line_number}: unsupported Intel HEX record type {record_type}")
-
-    return image
 
 
 def main():
@@ -64,10 +21,18 @@ def main():
         sys.path.insert(0, str(args.k0emu_dir.resolve()))
 
     try:
+        from intelhex import IntelHex, IntelHexError
         from k0emu.devices import MemoryDevice
         from k0emu.processor import Processor, RunState
     except ImportError as error:
-        parser.error(f"cannot import k0emu: {error}")
+        parser.error(f"cannot import regression dependency: {error}")
+
+    try:
+        image = IntelHex(str(args.image))
+    except (IntelHexError, OSError) as error:
+        parser.error(f"cannot load {args.image}: {error}")
+    if image and (image.minaddr() < 0 or image.maxaddr() >= 0x10000):
+        parser.error(f"{args.image}: data lies outside 78K0 memory")
 
     class RegressionMemory(MemoryDevice):
         def __init__(self):
@@ -87,21 +52,19 @@ def main():
             elif value == ord("s"):
                 self.stopped = True
 
-    image = parse_ihx(args.image)
     processor = Processor()
     memory = RegressionMemory()
     processor.bus.add_device(memory, (0x0000, 0xFFFF))
-    for address, value in image.items():
-        memory.load(address, bytes((value,)))
+    for start, end in image.segments():
+        memory.load(start, image.tobinarray(start=start, end=end - 1).tobytes())
     processor.reset()
 
-    recent_pcs = []
+    recent_pcs = deque(maxlen=16)
     for _ in range(args.max_steps):
         if memory.stopped:
             break
         instruction_pc = processor.pc
         recent_pcs.append(instruction_pc)
-        del recent_pcs[:-16]
         try:
             processor.step()
         except NotImplementedError as error:

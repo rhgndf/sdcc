@@ -20,26 +20,13 @@ template <class I_t>
 static void add_operand_conflicts_in_node (const cfg_node &, I_t &) {}
 
 static constexpr reg_t spilled_register = -1;
-static constexpr reg_t unknown_register = -2;
 
 static bool
-valid_register_pair (reg_t low, reg_t high)
+valid_word_layout (reg_t low, reg_t high)
 {
   return low == spilled_register ? high == spilled_register :
     low >= K78K0_RB0_X_IDX && low <= K78K0_RB0_L_IDX && !(low & 1) &&
     high == low + 1;
-}
-
-static bool
-register_pair_completable (reg_t low, reg_t high)
-{
-  if (low == unknown_register)
-    return high == unknown_register || high == spilled_register ||
-      high >= K78K0_RB0_A_IDX && high <= K78K0_RB0_H_IDX && (high & 1);
-  if (high == unknown_register)
-    return low == spilled_register ||
-      low >= K78K0_RB0_X_IDX && low <= K78K0_RB0_L_IDX && !(low & 1);
-  return valid_register_pair (low, high);
 }
 
 struct operand_layout
@@ -75,10 +62,8 @@ assigned_operand_layout (const operand *op, const assignment &a,
   return layout;
 }
 
-template <class G_t, class I_t>
 static bool
-operand_is_spilled (const operand *op, const assignment &a, unsigned short i,
-                    const G_t &G, const I_t &I)
+operand_is_spilled (const operand *op, const operand_layout &layout)
 {
   if (!op || !IS_SYMOP (op))
     return false;
@@ -89,20 +74,15 @@ operand_is_spilled (const operand *op, const assignment &a, unsigned short i,
   if (sym->remat || sym->regType == REG_CND)
     return false;
 
-  const operand_layout layout = assigned_operand_layout (op, a, i, G, I);
   /* Graph-absent iTemps use the generic dry stack operand and receive a real
      spill slot after allocation when their lifetime requires one. */
   return !layout.size || layout.registers[0] < 0 ||
     layout.size == 2 && layout.registers[1] < 0;
 }
 
-template <class G_t, class I_t>
 static bool
-operand_sane (const operand *op, unsigned forbidden, const assignment &a,
-              unsigned short i, const G_t &G, const I_t &I)
+layout_sane (const operand_layout &layout, unsigned forbidden)
 {
-  const operand_layout layout = assigned_operand_layout (op, a, i, G, I);
-
   if (!layout.size)
     return true;
 
@@ -110,22 +90,10 @@ operand_sane (const operand *op, unsigned forbidden, const assignment &a,
     layout.registers[0] == spilled_register ||
       layout.registers[0] >= K78K0_RB0_X_IDX &&
       layout.registers[0] <= K78K0_RB0_H_IDX :
-    layout.size == 2 && valid_register_pair (layout.registers[0],
-                                             layout.registers[1]);
+    layout.size == 2 && valid_word_layout (layout.registers[0],
+                                           layout.registers[1]);
 
   return sane && !(layout.mask & forbidden);
-}
-
-template <class G_t, class I_t>
-static bool
-operand_in_de (const operand *op, const assignment &a, unsigned short i,
-               const G_t &G, const I_t &I)
-{
-  const operand_layout layout = assigned_operand_layout (op, a, i, G, I);
-
-  return layout.size == 2 &&
-    layout.registers[0] == K78K0_RB0_E_IDX &&
-    layout.registers[1] == K78K0_RB0_D_IDX;
 }
 
 static const operand *
@@ -142,6 +110,13 @@ byte_pointer_preserved_in_de (const iCode *ic, unsigned clobbers)
 
   return offset && IS_OP_LITERAL (offset) && operandLitValue (offset) == 0 ?
     IC_LEFT (ic) : NULL;
+}
+
+static bool
+layout_is_pair (const operand_layout &layout, reg_t low)
+{
+  return layout.size == 2 && layout.registers[0] == low &&
+    layout.registers[1] == low + 1;
 }
 
 struct register_masks
@@ -195,9 +170,15 @@ inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I,
            const unsigned survivors)
 {
   const iCode *ic = G[i].ic;
-  const bool left_spilled = operand_is_spilled (IC_LEFT (ic), a, i, G, I);
-  const bool right_spilled = operand_is_spilled (IC_RIGHT (ic), a, i, G, I);
-  const bool result_spilled = operand_is_spilled (IC_RESULT (ic), a, i, G, I);
+  const operand_layout left_layout =
+    assigned_operand_layout (IC_LEFT (ic), a, i, G, I);
+  const operand_layout right_layout =
+    assigned_operand_layout (IC_RIGHT (ic), a, i, G, I);
+  const operand_layout result_layout =
+    assigned_operand_layout (IC_RESULT (ic), a, i, G, I);
+  const bool left_spilled = operand_is_spilled (IC_LEFT (ic), left_layout);
+  const bool right_spilled = operand_is_spilled (IC_RIGHT (ic), right_layout);
+  const bool result_spilled = operand_is_spilled (IC_RESULT (ic), result_layout);
   const bool stack_uses_hl = ic->op == ADDRESS_OF ?
     result_spilled : left_spilled || right_spilled || result_spilled;
   k78k0_instruction_traits constraints = k78k0InstructionTraits (ic);
@@ -210,8 +191,20 @@ inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I,
   unsigned clobbers = constraints.clobbers;
   const operand *de_pointer =
     byte_pointer_preserved_in_de (ic, constraints.clobbers);
-  if (de_pointer && operand_in_de (de_pointer, a, i, G, I))
-    clobbers &= ~K78K0_MASK_DE;
+  if (de_pointer)
+    {
+      const operand_layout &pointer_layout =
+        de_pointer == IC_RESULT (ic) ? result_layout : left_layout;
+
+      if (layout_is_pair (pointer_layout, K78K0_RB0_E_IDX))
+        clobbers &= ~K78K0_MASK_DE;
+    }
+  /* genWordBinaryOp reads an exact BC addend in place. */
+  if (ic->op == '+' &&
+      clobbers == (K78K0_MASK_AX | K78K0_MASK_BC | K78K0_MASK_DE) &&
+      (layout_is_pair (left_layout, K78K0_RB0_C_IDX) ||
+       layout_is_pair (right_layout, K78K0_RB0_C_IDX)))
+    clobbers &= ~K78K0_MASK_BC;
   if (stack_uses_hl)
     clobbers |= K78K0_MASK_HL;
   const unsigned hl_clobbers = clobbers & K78K0_MASK_HL;
@@ -223,9 +216,9 @@ inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I,
   if (POINTER_SET (ic))
     constraints.result |= hl_clobbers;
 
-  return operand_sane (IC_LEFT (ic), constraints.left, a, i, G, I) &&
-    operand_sane (IC_RIGHT (ic), constraints.right, a, i, G, I) &&
-    operand_sane (IC_RESULT (ic), constraints.result, a, i, G, I) &&
+  return layout_sane (left_layout, constraints.left) &&
+    layout_sane (right_layout, constraints.right) &&
+    layout_sane (result_layout, constraints.result) &&
     !(survivors & clobbers);
 }
 
@@ -285,10 +278,8 @@ assign_operands_for_cost (const assignment &a, unsigned short i, const G_t &G,
   assign_operand_for_cost (IC_RESULT (ic), a, i, G, I);
 
   if (iCode *next = k78k0AdjacentAssignment (ic))
-    {
-      const unsigned short next_i = next_instruction (i, G);
-      assign_operand_for_cost (IC_RESULT (next), a, next_i, G, I);
-    }
+    assign_operand_for_cost (IC_RESULT (next), a, next_instruction (i, G),
+                             G, I);
 
   if (ic->op == SEND && ic->builtinSEND)
     assign_operands_for_cost (a, next_instruction (i, G), G, I);
@@ -326,22 +317,20 @@ static bool
 assignment_hopeless (const assignment &a, unsigned short, const G_t &, const I_t &I, const var_t lastvar)
 {
   const int size = I[lastvar].size;
-  const var_t first = lastvar - I[lastvar].byte;
-  reg_t registers_by_byte[2] = {unknown_register, unknown_register};
-
-  for (int byte = 0; byte < size; byte++)
-    {
-      const var_t v = first + byte;
-
-      if (std::binary_search (a.local.begin (), a.local.end (), v))
-        registers_by_byte[byte] = a.global[v];
-    }
+  const int byte = I[lastvar].byte;
+  const reg_t reg = a.global[lastvar];
 
   if (size == 1)
-    return registers_by_byte[0] < unknown_register ||
-      registers_by_byte[0] > K78K0_RB0_H_IDX;
-  return size != 2 ||
-    !register_pair_completable (registers_by_byte[0], registers_by_byte[1]);
+    return reg < spilled_register || reg > K78K0_RB0_H_IDX;
+  if (size != 2 || reg < spilled_register || reg > K78K0_RB0_H_IDX ||
+      (reg >= 0 && (reg & 1) != byte))
+    return true;
+
+  const var_t sibling = lastvar + (byte ? -1 : 1);
+  if (!std::binary_search (a.local.begin (), a.local.end (), sibling))
+    return false;
+  return byte ? !valid_word_layout (a.global[sibling], reg) :
+    !valid_word_layout (reg, a.global[sibling]);
 }
 
 template <class G_t, class I_t>
@@ -352,8 +341,12 @@ rough_cost_estimate (const assignment &a, unsigned short, const G_t &, const I_t
 
   for (var_t v : a.local)
     {
-      const symbol *sym = static_cast<symbol *> (hTabItemWithKey (liveRanges, I[v].v));
-      if (a.global[v] < 0 && !sym->remat)
+      if (a.global[v] >= 0)
+        continue;
+
+      const symbol *sym =
+        static_cast<const symbol *> (hTabItemWithKey (liveRanges, I[v].v));
+      if (!sym->remat)
         cost += IS_REGISTER (sym->type) ? 1.0f : 0.05f;
     }
   return cost;
@@ -376,8 +369,7 @@ get_best_local_assignment_biased (assignment &a,
   a.local.swap (local);
 }
 
-/* Comparisons and GETABIT directly emit a following IFX branch. Keep the
-   fused boolean out of the conflict graph and do not cost the IFX twice. */
+/* Mark iCodes emitted by hidden-return or comparison fusion. */
 static void
 extra_ic_generated (iCode *ic)
 {
@@ -390,16 +382,18 @@ extra_ic_generated (iCode *ic)
           if (bridge->op == ADDRESS_OF)
             bridge->next->generated = true;
         }
+      return;
     }
-  else if (ic->op == EQ_OP || ic->op == NE_OP || ic->op == '<' ||
-           ic->op == '>' || ic->op == GETABIT)
+
+  if (ic->op != EQ_OP && ic->op != NE_OP && ic->op != '<' &&
+      ic->op != '>' && ic->op != GETABIT)
+    return;
+
+  if (iCode *ifx = ifxForOp (IC_RESULT (ic), ic))
     {
-      if (iCode *ifx = ifxForOp (IC_RESULT (ic), ic))
-        {
-          OP_SYMBOL (IC_RESULT (ic))->for_newralloc = false;
-          OP_SYMBOL (IC_RESULT (ic))->regType = REG_CND;
-          ifx->generated = true;
-        }
+      OP_SYMBOL (IC_RESULT (ic))->for_newralloc = false;
+      OP_SYMBOL (IC_RESULT (ic))->regType = REG_CND;
+      ifx->generated = true;
     }
 }
 
@@ -438,12 +432,8 @@ allocate (T_t &T, G_t &G, const I_t &I)
     {
       symbol *sym = static_cast<symbol *> (hTabItemWithKey (liveRanges, I[v].v));
       const int size = I[v].size;
-      reg_t registers[2] = {spilled_register, spilled_register};
 
-      for (int byte = 0; byte < size; byte++)
-        registers[byte] = winner.global[v + byte];
-
-      if (assign_symbol_registers (sym, size, registers))
+      if (assign_symbol_registers (sym, size, &winner.global[v]))
         k78k0SpillThis (sym);
       v += size;
     }

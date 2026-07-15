@@ -207,7 +207,8 @@ replace restart {
 %1:
 } by {
 	bnz	%2
-} if labelInRange(%2), labelRefCount(%1 1), labelRefCountChange(%1 -1)
+%1:
+} if labelInRange(%2), labelRefCountChange(%1 -1)
 
 replace restart {
 	bnz	%1
@@ -215,7 +216,8 @@ replace restart {
 %1:
 } by {
 	bz	%2
-} if labelInRange(%2), labelRefCount(%1 1), labelRefCountChange(%1 -1)
+%1:
+} if labelInRange(%2), labelRefCountChange(%1 -1)
 
 replace restart {
 	bc	%1
@@ -223,7 +225,8 @@ replace restart {
 %1:
 } by {
 	bnc	%2
-} if labelInRange(%2), labelRefCount(%1 1), labelRefCountChange(%1 -1)
+%1:
+} if labelInRange(%2), labelRefCountChange(%1 -1)
 
 replace restart {
 	bnc	%1
@@ -231,7 +234,8 @@ replace restart {
 %1:
 } by {
 	bc	%2
-} if labelInRange(%2), labelRefCount(%1 1), labelRefCountChange(%1 -1)
+%1:
+} if labelInRange(%2), labelRefCountChange(%1 -1)
 
 replace restart {
 	bf	a.%1,%2
@@ -239,7 +243,8 @@ replace restart {
 %2:
 } by {
 	bt	a.%1,%3
-} if labelInRange(%3), labelRefCount(%2 1), labelRefCountChange(%2 -1)
+%2:
+} if labelInRange(%3), labelRefCountChange(%2 -1)
 
 replace restart {
 	bt	a.%1,%2
@@ -247,7 +252,64 @@ replace restart {
 %2:
 } by {
 	bf	a.%1,%3
-} if labelInRange(%3), labelRefCount(%2 1), labelRefCountChange(%2 -1)
+%2:
+} if labelInRange(%3), labelRefCountChange(%2 -1)
+
+// Keep the same transformation available after a long BR has been relaxed.
+
+replace restart {
+	bz	%1
+	br	%2
+%1:
+} by {
+	bnz	%2
+%1:
+} if labelInRange(%2), labelRefCountChange(%1 -1)
+
+replace restart {
+	bnz	%1
+	br	%2
+%1:
+} by {
+	bz	%2
+%1:
+} if labelInRange(%2), labelRefCountChange(%1 -1)
+
+replace restart {
+	bc	%1
+	br	%2
+%1:
+} by {
+	bnc	%2
+%1:
+} if labelInRange(%2), labelRefCountChange(%1 -1)
+
+replace restart {
+	bnc	%1
+	br	%2
+%1:
+} by {
+	bc	%2
+%1:
+} if labelInRange(%2), labelRefCountChange(%1 -1)
+
+replace restart {
+	bf	a.%1,%2
+	br	%3
+%2:
+} by {
+	bt	a.%1,%3
+%2:
+} if labelInRange(%3), labelRefCountChange(%2 -1)
+
+replace restart {
+	bt	a.%1,%2
+	br	%3
+%2:
+} by {
+	bf	a.%1,%3
+%2:
+} if labelInRange(%3), labelRefCountChange(%2 -1)
 
 replace restart {
 	br	!%1
@@ -271,3 +333,27 @@ replace restart {
 } by {
 %2:
 } if same(%1 'br' 'bc' 'bnc' 'bz' 'bnz'), labelRefCountChange(%2 -1)
+
+// Removing an unused label can expose another branch inversion rule.
+
+replace restart {
+%1:
+} by {
+} if labelRefCount(%1 0)
+
+// Do this after branch inversion so a conditional diamond is simplified
+// before its unconditional branch is replaced by the target's return.
+
+barrier
+
+replace restart {
+	br	!%1
+} by {
+	ret
+} if labelIsReturnOnly(%1), labelRefCountChange(%1 -1)
+
+replace restart {
+	br	%1
+} by {
+	ret
+} if labelIsReturnOnly(%1), labelRefCountChange(%1 -1)

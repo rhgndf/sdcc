@@ -11,7 +11,6 @@
 
 #include "ralloc.h"
 #include "gen.h"
-#include "dbuf_string.h"
 
 static int spill_slot_id;
 static set *spill_slots;
@@ -70,7 +69,6 @@ static symbol *
 createSpillSlot (symbol *sym)
 {
   const int size = getSize (sym->type);
-  symbol *slot = NULL;
 
   for (symbol *candidate = setFirstItem (spill_slots); candidate;
        candidate = setNextItem (spill_slots))
@@ -84,32 +82,26 @@ createSpillSlot (symbol *sym)
           break;
       if (!occupant)
         {
-          slot = candidate;
-          break;
+          addSetHead (&candidate->usl.itmpStack, sym);
+          return candidate;
         }
     }
 
-  if (!slot)
-    {
-      struct dbuf_s dbuf;
+  char name[32];
+  SNPRINTF (name, sizeof (name), "sloc%d", spill_slot_id++);
+  symbol *slot = newiTemp (name);
 
-      dbuf_init (&dbuf, 128);
-      dbuf_printf (&dbuf, "sloc%d", spill_slot_id++);
-      slot = newiTemp (dbuf_c_str (&dbuf));
-      dbuf_destroy (&dbuf);
+  slot->type = copyLinkChain (sym->type);
+  slot->etype = getSpec (slot->type);
+  SPEC_SCLS (slot->etype) = S_AUTO;
+  SPEC_EXTR (slot->etype) = SPEC_STAT (slot->etype) = SPEC_VOLATILE (slot->etype) = 0;
+  slot->_isparm = slot->ismyparm = 0;
 
-      slot->type = copyLinkChain (sym->type);
-      slot->etype = getSpec (slot->type);
-      SPEC_SCLS (slot->etype) = S_AUTO;
-      SPEC_EXTR (slot->etype) = SPEC_STAT (slot->etype) = SPEC_VOLATILE (slot->etype) = 0;
-      slot->_isparm = slot->ismyparm = 0;
-
-      wassertl (currFunc, "78K0 iTemp spill outside of a function.");
-      allocLocal (slot);
-      currFunc->stack += size;
-      slot->isref = slot->stackSpil = 1;
-      addSetHead (&spill_slots, slot);
-    }
+  wassertl (currFunc, "78K0 iTemp spill outside of a function.");
+  allocLocal (slot);
+  currFunc->stack += size;
+  slot->isref = slot->stackSpil = 1;
+  addSetHead (&spill_slots, slot);
 
   addSetHead (&slot->usl.itmpStack, sym);
   return slot;
@@ -154,12 +146,6 @@ isDirectlyForwardedHiddenResult (const symbol *sym)
 
   iCode *call = hTabItemWithKey (iCodehTab, bitVectFirstBit (sym->defs));
   return call && k78k0HiddenReturnForwardBridge (call, currFunc->type);
-}
-
-static bool
-hasPhysicalStorage (const symbol *sym)
-{
-  return sym->regs[0] || sym->usl.spillLoc;
 }
 
 void
@@ -212,7 +198,7 @@ k78k0_assignRegisters (ebbIndex *ebbi)
       const int size = getSize (sym->type);
 
       if (sym->isitmp && sym->regType != REG_CND && size > 0 && !sym->remat &&
-          !hasPhysicalStorage (sym) &&
+          !sym->regs[0] && !sym->usl.spillLoc &&
           (sym->liveTo > sym->liveFrom || size > 4 || IS_STRUCT (sym->type)) &&
           !isDirectlyForwardedHiddenResult (sym))
         k78k0SpillThis (sym);
@@ -223,5 +209,4 @@ k78k0_assignRegisters (ebbIndex *ebbi)
 
   gen78K0Code (ic_head);
   deleteSet (&spill_slots);
-  spill_slot_id = 0;
 }

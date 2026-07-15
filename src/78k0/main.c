@@ -677,8 +677,8 @@ k78k0_hasNativeMulFor (iCode *ic, sym_link *left, sym_link *right)
        (IS_LITERAL (right) && ulFromVal (valFromType (right)) <= 255 && getSize (left) == 2)))
     return true;
 
-  return getSize (left) == 1 && getSize (right) == 1 &&
-    SPEC_USIGN (getSpec (left)) && SPEC_USIGN (getSpec (right));
+  return IS_ITEMP (IC_RESULT (ic)) && result_size <= 2 &&
+    getSize (left) == 1 && getSize (right) == 1;
 }
 
 static bool

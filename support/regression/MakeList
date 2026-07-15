@@ -58,10 +58,9 @@ EXCLUDE_mcs51-small += \
 EXCLUDE_ARCH_mos6502 += \
 	tst_bug-3129
 
-# The Python emulator does not complete these within the regression timeout.
+# The Python emulator does not complete this test within the regression timeout.
 EXCLUDE_78k0 += \
-	gcrypt-serpent \
-	tst_bug-3129
+	gcrypt-serpent
 
 # Assumes an 8051-style __idata address space separate from program memory.
 EXCLUDE_78k0 += \

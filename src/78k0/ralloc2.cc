@@ -42,9 +42,43 @@ register_pair_completable (reg_t low, reg_t high)
   return valid_register_pair (low, high);
 }
 
-template <class G_t>
+struct operand_layout
+{
+  int size = 0;
+  reg_t registers[2] = {spilled_register, spilled_register};
+  unsigned mask = 0;
+};
+
+template <class G_t, class I_t>
+static operand_layout
+assigned_operand_layout (const operand *op, const assignment &a,
+                         unsigned short i, const G_t &G, const I_t &I)
+{
+  operand_layout layout;
+
+  if (!op || !IS_SYMOP (op))
+    return layout;
+
+  const auto range = G[i].operands.equal_range (OP_SYMBOL_CONST (op)->key);
+  if (range.first == range.second)
+    return layout;
+
+  layout.size = I[range.first->second].size;
+  for (auto entry = range.first; entry != range.second; ++entry)
+    {
+      const reg_t reg = a.global[entry->second];
+
+      layout.registers[I[entry->second].byte] = reg;
+      if (reg >= 0)
+        layout.mask |= 1u << reg;
+    }
+  return layout;
+}
+
+template <class G_t, class I_t>
 static bool
-operand_is_spilled (const operand *op, const assignment &a, unsigned short i, const G_t &G)
+operand_is_spilled (const operand *op, const assignment &a, unsigned short i,
+                    const G_t &G, const I_t &I)
 {
   if (!op || !IS_SYMOP (op))
     return false;
@@ -55,15 +89,11 @@ operand_is_spilled (const operand *op, const assignment &a, unsigned short i, co
   if (sym->remat || sym->regType == REG_CND)
     return false;
 
-  const auto range = G[i].operands.equal_range (sym->key);
+  const operand_layout layout = assigned_operand_layout (op, a, i, G, I);
   /* Graph-absent iTemps use the generic dry stack operand and receive a real
      spill slot after allocation when their lifetime requires one. */
-  if (range.first == range.second)
-    return true;
-  for (auto operand = range.first; operand != range.second; ++operand)
-    if (a.global[operand->second] < 0)
-      return true;
-  return false;
+  return !layout.size || layout.registers[0] < 0 ||
+    layout.size == 2 && layout.registers[1] < 0;
 }
 
 template <class G_t, class I_t>
@@ -71,32 +101,47 @@ static bool
 operand_sane (const operand *op, unsigned forbidden, const assignment &a,
               unsigned short i, const G_t &G, const I_t &I)
 {
-  if (!op || !IS_SYMOP (op))
+  const operand_layout layout = assigned_operand_layout (op, a, i, G, I);
+
+  if (!layout.size)
     return true;
 
-  const auto range = G[i].operands.equal_range (OP_SYMBOL_CONST (op)->key);
-  if (range.first == range.second)
-    return true;
+  const bool sane = layout.size == 1 ?
+    layout.registers[0] == spilled_register ||
+      layout.registers[0] >= K78K0_RB0_X_IDX &&
+      layout.registers[0] <= K78K0_RB0_H_IDX :
+    layout.size == 2 && valid_register_pair (layout.registers[0],
+                                             layout.registers[1]);
 
-  const int size = I[range.first->second].size;
-  reg_t registers_by_byte[2] = {spilled_register, spilled_register};
-  unsigned registers = 0;
-  for (auto entry = range.first; entry != range.second; ++entry)
-    {
-      const reg_t reg = a.global[entry->second];
+  return sane && !(layout.mask & forbidden);
+}
 
-      registers_by_byte[I[entry->second].byte] = reg;
-      if (reg >= 0)
-        registers |= 1u << reg;
-    }
+template <class G_t, class I_t>
+static bool
+operand_in_de (const operand *op, const assignment &a, unsigned short i,
+               const G_t &G, const I_t &I)
+{
+  const operand_layout layout = assigned_operand_layout (op, a, i, G, I);
 
-  const bool layout_sane = size == 1 ?
-    registers_by_byte[0] == spilled_register ||
-      registers_by_byte[0] >= K78K0_RB0_X_IDX &&
-      registers_by_byte[0] <= K78K0_RB0_H_IDX :
-    size == 2 && valid_register_pair (registers_by_byte[0], registers_by_byte[1]);
+  return layout.size == 2 &&
+    layout.registers[0] == K78K0_RB0_E_IDX &&
+    layout.registers[1] == K78K0_RB0_D_IDX;
+}
 
-  return layout_sane && !(registers & forbidden);
+static const operand *
+byte_pointer_preserved_in_de (const iCode *ic, unsigned clobbers)
+{
+  if (clobbers != (K78K0_MASK_AX | K78K0_MASK_DE))
+    return NULL;
+
+  if (ic->op != GET_VALUE_AT_ADDRESS)
+    return ic->op == SET_VALUE_AT_ADDRESS ? IC_LEFT (ic) :
+      POINTER_SET (ic) ? IC_RESULT (ic) : NULL;
+
+  const operand *offset = IC_RIGHT (ic);
+
+  return offset && IS_OP_LITERAL (offset) && operandLitValue (offset) == 0 ?
+    IC_LEFT (ic) : NULL;
 }
 
 struct register_masks
@@ -150,9 +195,9 @@ inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I,
            const unsigned survivors)
 {
   const iCode *ic = G[i].ic;
-  const bool left_spilled = operand_is_spilled (IC_LEFT (ic), a, i, G);
-  const bool right_spilled = operand_is_spilled (IC_RIGHT (ic), a, i, G);
-  const bool result_spilled = operand_is_spilled (IC_RESULT (ic), a, i, G);
+  const bool left_spilled = operand_is_spilled (IC_LEFT (ic), a, i, G, I);
+  const bool right_spilled = operand_is_spilled (IC_RIGHT (ic), a, i, G, I);
+  const bool result_spilled = operand_is_spilled (IC_RESULT (ic), a, i, G, I);
   const bool stack_uses_hl = ic->op == ADDRESS_OF ?
     result_spilled : left_spilled || right_spilled || result_spilled;
   k78k0_instruction_traits constraints = k78k0InstructionTraits (ic);
@@ -162,8 +207,13 @@ inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I,
   if (left_spilled)
     constraints.right |= constraints.right_if_left_spilled;
 
-  const unsigned clobbers = constraints.clobbers |
-    (stack_uses_hl ? K78K0_MASK_HL : 0);
+  unsigned clobbers = constraints.clobbers;
+  const operand *de_pointer =
+    byte_pointer_preserved_in_de (ic, constraints.clobbers);
+  if (de_pointer && operand_in_de (de_pointer, a, i, G, I))
+    clobbers &= ~K78K0_MASK_DE;
+  if (stack_uses_hl)
+    clobbers |= K78K0_MASK_HL;
   const unsigned hl_clobbers = clobbers & K78K0_MASK_HL;
 
   /* HL is the backend's stack and pointer scratch pair. Dying inputs need an
@@ -206,19 +256,10 @@ static void
 assign_operand_for_cost (operand *op, const assignment &a, unsigned short i,
                          const G_t &G, const I_t &I)
 {
-  if (!op || !IS_SYMOP (op))
-    return;
+  const operand_layout layout = assigned_operand_layout (op, a, i, G, I);
 
-  symbol *sym = OP_SYMBOL (op);
-  const auto range = G[i].operands.equal_range (sym->key);
-  if (range.first == range.second)
-    return;
-
-  const int size = I[range.first->second].size;
-  reg_t registers[2] = {spilled_register, spilled_register};
-  for (auto entry = range.first; entry != range.second; ++entry)
-    registers[I[entry->second].byte] = a.global[entry->second];
-  assign_symbol_registers (sym, size, registers);
+  if (layout.size)
+    assign_symbol_registers (OP_SYMBOL (op), layout.size, layout.registers);
 }
 
 template <class G_t>

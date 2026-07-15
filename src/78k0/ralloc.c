@@ -128,33 +128,22 @@ k78k0SpillThis (symbol *sym)
     sym->regs[i] = NULL;
 }
 
-static bool
-allUsesRegisterSafe (const symbol *sym)
+static void
+disableForbiddenOperand (operand *op, const unsigned forbidden)
 {
-  for (int key = 0; key < sym->uses->size; key++)
-    {
-      if (!bitVectBitValue (sym->uses, key))
-        continue;
-      const iCode *ic = hTabItemWithKey (iCodehTab, key);
-      if (!ic)
-        return false;
+  if (forbidden == K78K0_MASK_ALL && IS_ITEMP (op))
+    OP_SYMBOL (op)->for_newralloc = false;
+}
 
-      const unsigned roles =
-        (IC_LEFT (ic) && IS_SYMOP (IC_LEFT (ic)) &&
-         OP_SYMBOL_CONST (IC_LEFT (ic)) == sym ? K78K0_ROLE_LEFT : 0) |
-        (IC_RIGHT (ic) && IS_SYMOP (IC_RIGHT (ic)) &&
-         OP_SYMBOL_CONST (IC_RIGHT (ic)) == sym ? K78K0_ROLE_RIGHT : 0) |
-        /* Ordinary results are definitions.  Only pointer stores use RESULT
-           as an input operand. */
-        (POINTER_SET (ic) && IC_RESULT (ic) && IS_SYMOP (IC_RESULT (ic)) &&
-         OP_SYMBOL_CONST (IC_RESULT (ic)) == sym ? K78K0_ROLE_RESULT : 0);
+static void
+disableUnsupportedOperands (iCode *ic)
+{
+  const k78k0_instruction_traits traits = k78k0InstructionTraits (ic);
 
-      const unsigned safe_roles = k78k0InstructionTraits (ic).safe_roles;
-      if (!roles || (roles & ~safe_roles))
-        return false;
-    }
-
-  return true;
+  disableForbiddenOperand (IC_LEFT (ic), traits.left);
+  disableForbiddenOperand (IC_RIGHT (ic), traits.right);
+  if (POINTER_SET (ic))
+    disableForbiddenOperand (IC_RESULT (ic), traits.result);
 }
 
 static bool
@@ -206,8 +195,14 @@ k78k0_assignRegisters (ebbIndex *ebbi)
       /* Wide lowerings use the fixed AX/BC result registers as scratch, so
          keep values wider than a word in stack storage. */
       sym->for_newralloc = size <= 2 && sym->liveTo > sym->liveFrom &&
-                           bitVectnBitsOn (sym->defs) && allUsesRegisterSafe (sym);
+                           bitVectnBitsOn (sym->defs);
     }
+
+  /* Keep operands that no lowering can consume in registers out of the
+     conflict graph without doing a symbol-by-symbol walk over use bitvectors. */
+  for (int i = 0; i < ebbi->count; i++)
+    for (iCode *ic = ebbi->bbOrder[i]->sch; ic; ic = ic->next)
+      disableUnsupportedOperands (ic);
 
   iCode *ic_head = k78k0_ralloc2_cc (ebbi);
 

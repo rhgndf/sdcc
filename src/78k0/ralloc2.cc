@@ -115,41 +115,49 @@ value_survives (var_t v, unsigned short i, const G_t &G, const I_t &I)
     (POINTER_SET (ic) || !operand_is_symbol (IC_RESULT (ic), I[v].v));
 }
 
-template <class G_t, class I_t>
-static unsigned
-surviving_registers (const assignment &a, unsigned short i, const G_t &G,
-                     const I_t &I)
+struct register_masks
 {
-  unsigned survivors = 0;
-
-  for (var_t v : G[i].alive)
-    if (a.global[v] >= 0 && value_survives (v, i, G, I))
-      survivors |= 1u << a.global[v];
-  return survivors;
-}
+  unsigned assigned;
+  unsigned surviving;
+};
 
 template <class G_t, class I_t>
-static void
-set_surviving_regs (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
+static register_masks
+assignment_register_masks (const assignment &a, unsigned short i,
+                           const G_t &G, const I_t &I)
 {
-  iCode *ic = G[i].ic;
+  register_masks masks = {0, 0};
 
-  bitVectClear (ic->rMask);
-  bitVectClear (ic->rSurv);
   for (var_t v : G[i].alive)
     if (a.global[v] >= 0)
       {
-        const unsigned reg = a.global[v];
+        const unsigned bit = 1u << a.global[v];
 
-        ic->rMask = bitVectSetBit (ic->rMask, reg);
+        masks.assigned |= bit;
         if (value_survives (v, i, G, I))
-          ic->rSurv = bitVectSetBit (ic->rSurv, reg);
+          masks.surviving |= bit;
       }
+  return masks;
+}
+
+static void
+set_register_masks (iCode *ic, const register_masks masks)
+{
+  bitVectClear (ic->rMask);
+  bitVectClear (ic->rSurv);
+  for (unsigned reg = K78K0_RB0_X_IDX; reg <= K78K0_RB0_H_IDX; reg++)
+    {
+      if (masks.assigned & (1u << reg))
+        ic->rMask = bitVectSetBit (ic->rMask, reg);
+      if (masks.surviving & (1u << reg))
+        ic->rSurv = bitVectSetBit (ic->rSurv, reg);
+    }
 }
 
 template <class G_t, class I_t>
 static bool
-inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
+inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I,
+           const unsigned survivors)
 {
   const iCode *ic = G[i].ic;
   const bool left_spilled = operand_is_spilled (IC_LEFT (ic), a, i, G);
@@ -178,7 +186,29 @@ inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
   return operand_sane (IC_LEFT (ic), constraints.left, a, i, G, I) &&
     operand_sane (IC_RIGHT (ic), constraints.right, a, i, G, I) &&
     operand_sane (IC_RESULT (ic), constraints.result, a, i, G, I) &&
-    !(surviving_registers (a, i, G, I) & clobbers);
+    !(survivors & clobbers);
+}
+
+static bool
+assign_symbol_registers (symbol *sym, const int size, const reg_t *registers)
+{
+  bool has_register = false;
+  bool has_spill = false;
+
+  sym->nRegs = size;
+  for (int byte = 0; byte < size; byte++)
+    {
+      const reg_t reg = registers[byte];
+
+      sym->regs[byte] = reg >= 0 ? k78k0_regs + reg : NULL;
+      has_register |= reg >= 0;
+      has_spill |= reg < 0;
+    }
+
+  sym->isspilt = has_spill && !has_register;
+  sym->spillA = has_spill;
+  sym->stackSpil = has_spill && !sym->remat;
+  return has_spill;
 }
 
 template <class G_t, class I_t>
@@ -195,21 +225,13 @@ assign_operand_for_cost (operand *op, const assignment &a, unsigned short i,
     return;
 
   const int size = I[range.first->second].size;
-  sym->nRegs = size;
-  std::fill (sym->regs, sym->regs + size, static_cast<reg_info *> (NULL));
+  reg_t registers[2] = {spilled_register, spilled_register};
   for (auto entry = range.first; entry != range.second; ++entry)
     {
       const var_t v = entry->second;
-      const reg_t reg = a.global[v];
-
-      sym->regs[I[v].byte] = reg >= 0 ? k78k0_regs + reg : NULL;
+      registers[I[v].byte] = a.global[v];
     }
-
-  const bool has_register = sym->regs[0] || size == 2 && sym->regs[1];
-  const bool has_spill = !sym->regs[0] || size == 2 && !sym->regs[1];
-  sym->isspilt = has_spill && !has_register;
-  sym->spillA = has_spill;
-  sym->stackSpil = has_spill && !sym->remat;
+  assign_symbol_registers (sym, size, registers);
 }
 
 template <class G_t>
@@ -230,16 +252,9 @@ assign_operands_for_cost (const assignment &a, unsigned short i, const G_t &G,
 {
   const iCode *ic = G[i].ic;
 
-  if (ic->op == IFX)
-    assign_operand_for_cost (IC_COND (ic), a, i, G, I);
-  else if (ic->op == JUMPTABLE)
-    assign_operand_for_cost (IC_JTCOND (ic), a, i, G, I);
-  else
-    {
-      assign_operand_for_cost (IC_LEFT (ic), a, i, G, I);
-      assign_operand_for_cost (IC_RIGHT (ic), a, i, G, I);
-      assign_operand_for_cost (IC_RESULT (ic), a, i, G, I);
-    }
+  assign_operand_for_cost (IC_LEFT (ic), a, i, G, I);
+  assign_operand_for_cost (IC_RIGHT (ic), a, i, G, I);
+  assign_operand_for_cost (IC_RESULT (ic), a, i, G, I);
 
   if (iCode *next = k78k0AdjacentAssignment (ic))
     {
@@ -263,14 +278,15 @@ static float
 instruction_cost (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
 {
   iCode *ic = G[i].ic;
+  const register_masks masks = assignment_register_masks (a, i, G, I);
 
-  if (!inst_sane (a, i, G, I))
+  if (!inst_sane (a, i, G, I, masks.surviving))
     return std::numeric_limits<float>::infinity ();
   if (ic->generated || assignment_does_not_matter (ic))
     return 0.0f;
 
   assign_operands_for_cost (a, i, G, I);
-  set_surviving_regs (a, i, G, I);
+  set_register_masks (ic, masks);
 
   const float cost = k78k0DryInstructionCost (ic);
   ic->generated = false;
@@ -394,25 +410,18 @@ allocate (T_t &T, G_t &G, const I_t &I)
     {
       symbol *sym = static_cast<symbol *> (hTabItemWithKey (liveRanges, I[v].v));
       const int size = I[v].size;
-      const bool spilled = winner.global[v] < 0;
+      reg_t registers[2] = {spilled_register, spilled_register};
 
-      sym->nRegs = size;
       for (int byte = 0; byte < size; byte++)
-        {
-          const reg_t reg = winner.global[v + byte];
+        registers[byte] = winner.global[v + byte];
 
-          sym->regs[byte] = reg >= 0 ? k78k0_regs + reg : NULL;
-        }
-
-      if (spilled)
+      if (assign_symbol_registers (sym, size, registers))
         k78k0SpillThis (sym);
-      else
-        sym->isspilt = sym->spillA = sym->stackSpil = false;
       v += size;
     }
 
   for (unsigned i = 0; i < boost::num_vertices (G); i++)
-    set_surviving_regs (winner, i, G, I);
+    set_register_masks (G[i].ic, assignment_register_masks (winner, i, G, I));
 }
 
 extern "C" iCode *

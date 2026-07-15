@@ -49,13 +49,6 @@ enum
   K78K0_MASK_ALL = K78K0_MASK_AX | K78K0_MASK_BC | K78K0_MASK_DE | K78K0_MASK_HL,
 };
 
-enum
-{
-  K78K0_ROLE_LEFT = 1u << 0,
-  K78K0_ROLE_RIGHT = 1u << 1,
-  K78K0_ROLE_RESULT = 1u << 2,
-};
-
 typedef struct
 {
   unsigned clobbers;
@@ -64,7 +57,6 @@ typedef struct
   unsigned result;
   unsigned left_if_right_spilled;
   unsigned right_if_left_spilled;
-  unsigned safe_roles;
 }
 k78k0_instruction_traits;
 

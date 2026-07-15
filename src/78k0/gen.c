@@ -751,26 +751,13 @@ resetFunctionState (void)
 }
 
 static k78k0_instruction_traits
-fixedInstructionTraits (const unsigned clobbers, const unsigned safe_roles)
+fixedInstructionTraits (const unsigned clobbers, const unsigned left,
+                        const unsigned right)
 {
   const k78k0_instruction_traits traits =
-    {clobbers, 0, 0, 0, 0, 0, safe_roles};
+    {clobbers, left, right, 0, 0, 0};
 
   return traits;
-}
-
-static unsigned
-pointerStoreValueConstraints (const operand *pointer)
-{
-  sym_link *pointer_type = pointer ? operandType (pointer) : NULL;
-  sym_link *field_type = pointer_type && pointer_type->next ?
-    getSpec (pointer_type->next) : NULL;
-  unsigned constraints = K78K0_MASK_AX | K78K0_MASK_DE | K78K0_MASK_HL;
-
-  if (field_type && IS_BITFIELD (field_type) &&
-      (SPEC_BSTR (field_type) + SPEC_BLEN (field_type) + 7) / 8 > 1)
-    constraints |= K78K0_MASK_BC;
-  return constraints;
 }
 
 static void
@@ -779,14 +766,11 @@ allowByteAccumulatorOperands (k78k0_instruction_traits *traits,
 {
   if (left_size == 1)
     {
-      traits->safe_roles |= K78K0_ROLE_LEFT;
+      traits->left = 0;
       traits->left_if_right_spilled |= K78K0_MASK_AX;
     }
   if (right_size == 1)
-    {
-      traits->safe_roles |= K78K0_ROLE_RIGHT;
-      traits->right |= K78K0_MASK_AX;
-    }
+    traits->right = K78K0_MASK_AX;
 }
 
 k78k0_instruction_traits
@@ -800,33 +784,36 @@ k78k0InstructionTraits (const iCode *ic)
     case ENDCRITICAL:
     case GOTO:
     case LABEL:
-      return fixedInstructionTraits (0, 0);
+      return fixedInstructionTraits (0, K78K0_MASK_ALL, K78K0_MASK_ALL);
     case RETURN:
-      return fixedInstructionTraits (K78K0_MASK_HL, K78K0_ROLE_LEFT);
+      return fixedInstructionTraits (K78K0_MASK_HL, 0, K78K0_MASK_ALL);
     case ADDRESS_OF:
-      return fixedInstructionTraits (K78K0_MASK_AX, 0);
+      return fixedInstructionTraits (K78K0_MASK_AX, K78K0_MASK_ALL,
+                                     K78K0_MASK_ALL);
     case GETBYTE:
     case GETABIT:
-      return fixedInstructionTraits (K78K0_MASK_AX, K78K0_ROLE_LEFT);
+      return fixedInstructionTraits (K78K0_MASK_AX, 0, K78K0_MASK_ALL);
     case GETWORD:
       return fixedInstructionTraits (K78K0_MASK_AX | (1u << K78K0_RB0_D_IDX),
-                                     K78K0_ROLE_LEFT);
+                                     0, K78K0_MASK_ALL);
     case DUMMY_READ_VOLATILE:
-      return fixedInstructionTraits (
-        K78K0_MASK_AX, K78K0_ROLE_LEFT | K78K0_ROLE_RIGHT | K78K0_ROLE_RESULT);
+      return fixedInstructionTraits (K78K0_MASK_AX, 0, 0);
     case IPUSH:
       return fixedInstructionTraits (K78K0_MASK_AX | K78K0_MASK_C | K78K0_MASK_HL,
-                                     K78K0_ROLE_LEFT);
+                                     0, K78K0_MASK_ALL);
     case SEND:
       return fixedInstructionTraits (K78K0_MASK_AX | K78K0_MASK_BC | K78K0_MASK_HL,
-                                     K78K0_ROLE_LEFT);
+                                     0, K78K0_MASK_ALL);
     case RECEIVE:
-      return fixedInstructionTraits (K78K0_MASK_AX | K78K0_MASK_BC | K78K0_MASK_HL, 0);
+      return fixedInstructionTraits (K78K0_MASK_AX | K78K0_MASK_BC | K78K0_MASK_HL,
+                                     K78K0_MASK_ALL, K78K0_MASK_ALL);
     default:
       break;
     }
 
-  k78k0_instruction_traits traits = {K78K0_MASK_ALL, 0, 0, 0, 0, 0, 0};
+  k78k0_instruction_traits traits =
+    {K78K0_MASK_ALL, K78K0_MASK_ALL, K78K0_MASK_ALL,
+     POINTER_SET (ic) ? K78K0_MASK_ALL : 0, 0, 0};
   const operand *left = IC_LEFT (ic);
   const operand *right = IC_RIGHT (ic);
   const operand *result = IC_RESULT (ic);
@@ -840,23 +827,18 @@ k78k0InstructionTraits (const iCode *ic)
       traits.clobbers = POINTER_SET (ic) ? K78K0_MASK_ALL :
         K78K0_MASK_AX | K78K0_MASK_C;
       if (!POINTER_SET (ic))
-        traits.safe_roles = K78K0_ROLE_RIGHT;
-      else
-        {
-          traits.right = pointerStoreValueConstraints (result);
-          if (result_size == 2)
-            traits.safe_roles = K78K0_ROLE_RESULT;
-        }
+        traits.right = 0;
+      else if (result_size == 2)
+        traits.result = 0;
       break;
     case SET_VALUE_AT_ADDRESS:
-      traits.right = pointerStoreValueConstraints (left);
       if (left_size == 2)
-        traits.safe_roles = K78K0_ROLE_LEFT;
+        traits.left = 0;
       break;
     case GET_VALUE_AT_ADDRESS:
       traits.clobbers = K78K0_MASK_AX | K78K0_MASK_C | K78K0_MASK_DE | K78K0_MASK_HL;
       if (left_size == 2)
-        traits.safe_roles = K78K0_ROLE_LEFT;
+        traits.left = 0;
       if (result && IS_BITFIELD (getSpec (operandType (result))))
         {
           sym_link *type = getSpec (operandType (result));
@@ -876,28 +858,28 @@ k78k0InstructionTraits (const iCode *ic)
         traits.clobbers = K78K0_MASK_AX | K78K0_MASK_C;
       allowByteAccumulatorOperands (&traits, left_size, right_size);
       if (left_size == 2 && (result_size == 2 || IS_OP_LITERAL (right)))
-        traits.safe_roles |= K78K0_ROLE_LEFT;
+        traits.left = 0;
       if (right_size == 2 &&
           (result_size == 2 || ic->op == '+' && IS_OP_LITERAL (left)))
-        traits.safe_roles |= K78K0_ROLE_RIGHT;
+        traits.right = 0;
       break;
     case '*':
       traits.clobbers = result_size == 1 ? K78K0_MASK_AX | K78K0_MASK_C : K78K0_MASK_ALL;
       if (left_size == 2 && IS_OP_LITERAL (right) &&
           operandLitValueUll (right) <= 255)
-        traits.safe_roles |= K78K0_ROLE_LEFT;
+        traits.left = 0;
       if (right_size == 2 && IS_OP_LITERAL (left) &&
           operandLitValueUll (left) <= 255)
-        traits.safe_roles |= K78K0_ROLE_RIGHT;
+        traits.right = 0;
       allowByteAccumulatorOperands (&traits, left_size, right_size);
       break;
     case LEFT_OP:
     case RIGHT_OP:
       traits.clobbers = result_size == 1 ? K78K0_MASK_AX | K78K0_MASK_BC : K78K0_MASK_ALL;
       if (left_size == 1 || left_size == 2 && result_size == 2)
-        traits.safe_roles |= K78K0_ROLE_LEFT;
+        traits.left = 0;
       if (right_size == 1)
-        traits.safe_roles |= K78K0_ROLE_RIGHT;
+        traits.right = 0;
       if (!IS_OP_LITERAL (right))
         {
           if (result_size == 2)
@@ -914,22 +896,22 @@ k78k0InstructionTraits (const iCode *ic)
 
         traits.clobbers = byte_rotate || word_swap ? K78K0_MASK_AX : K78K0_MASK_ALL;
         if (left_size == 1 || word_swap)
-          traits.safe_roles |= K78K0_ROLE_LEFT;
+          traits.left = 0;
       }
       if (right_size == 1)
-        traits.safe_roles |= K78K0_ROLE_RIGHT;
+        traits.right = 0;
       break;
     case UNARYMINUS:
       traits.clobbers = result_size <= 2 ? K78K0_MASK_AX : K78K0_MASK_ALL;
-      traits.safe_roles = K78K0_ROLE_LEFT;
+      traits.left = 0;
       break;
     case '/':
     case '%':
       traits.clobbers = result_size == 1 ? K78K0_MASK_AX | K78K0_MASK_C : K78K0_MASK_ALL;
       if (left_size == 1)
-        traits.safe_roles |= K78K0_ROLE_LEFT;
+        traits.left = 0;
       if (right_size == 1)
-        traits.safe_roles |= K78K0_ROLE_RIGHT;
+        traits.right = 0;
       if (!IS_OP_LITERAL (right))
         traits.left = (1u << K78K0_RB0_A_IDX) | K78K0_MASK_C;
       break;
@@ -938,20 +920,20 @@ k78k0InstructionTraits (const iCode *ic)
     case '^':
       traits.clobbers = result_size == 1 ? K78K0_MASK_AX | K78K0_MASK_C : K78K0_MASK_ALL;
       if (left_size == 2)
-        traits.safe_roles |= K78K0_ROLE_LEFT;
+        traits.left = 0;
       if (right_size == 2)
-        traits.safe_roles |= K78K0_ROLE_RIGHT;
+        traits.right = 0;
       allowByteAccumulatorOperands (&traits, left_size, right_size);
       break;
     case '!':
-      traits.safe_roles = K78K0_ROLE_LEFT;
+      traits.left = 0;
       /* Fall through. */
     case CAST:
       /* Boolean materialization can accumulate a multi-byte or spilled
          two-byte source in B before producing its one-byte result. */
       traits.clobbers = result_size == 1 ? K78K0_MASK_AX | K78K0_MASK_BC : K78K0_MASK_ALL;
       if (ic->op == CAST)
-        traits.safe_roles = K78K0_ROLE_RIGHT;
+        traits.right = 0;
       break;
     case EQ_OP:
     case NE_OP:
@@ -963,7 +945,7 @@ k78k0InstructionTraits (const iCode *ic)
         traits.clobbers = left_size == 1 ? K78K0_MASK_AX | K78K0_MASK_C : K78K0_MASK_ALL;
       allowByteAccumulatorOperands (&traits, left_size, right_size);
       if (left_size == 2 && IS_OP_LITERAL (right))
-        traits.safe_roles |= K78K0_ROLE_LEFT;
+        traits.left = 0;
       if (left_size == 1 && !IS_OP_LITERAL (right) &&
           (ic->op == '<' || ic->op == '>') &&
           !SPEC_USIGN (getSpec (operandType (left))))
@@ -986,13 +968,13 @@ k78k0InstructionTraits (const iCode *ic)
     case IFX:
       traits.clobbers = !left_size ? K78K0_MASK_ALL :
         left_size == 1 ? K78K0_MASK_AX : K78K0_MASK_AX | K78K0_MASK_B;
-      traits.safe_roles = K78K0_ROLE_LEFT;
+      traits.left = 0;
       break;
     case PCALL:
       /* The indirect target cannot share DE with a register argument: PCALL
          parks that argument in DE before loading the target into AX. */
       if (!aopArg (left ? operandType (left) : NULL, 1))
-        traits.safe_roles = K78K0_ROLE_LEFT;
+        traits.left = 0;
       break;
     case CALL:
       {
@@ -1007,7 +989,7 @@ k78k0InstructionTraits (const iCode *ic)
     case JUMPTABLE:
       traits.clobbers = K78K0_MASK_AX | K78K0_MASK_C | K78K0_MASK_HL |
         (left_size > 3 ? K78K0_MASK_B : 0);
-      traits.safe_roles = K78K0_ROLE_LEFT;
+      traits.left = 0;
       break;
     default:
       break;

@@ -73,6 +73,7 @@ void k78k0_emitDebuggerSymbol (const char *);
 int k78k0_instructionSize (const char *, const char *);
 float k78k0DryInstructionCost (iCode *);
 k78k0_instruction_traits k78k0InstructionTraits (const iCode *);
+iCode *k78k0AdjacentAssignment (const iCode *);
 iCode *k78k0HiddenReturnForwardBridge (iCode *, sym_link *);
 
 #endif

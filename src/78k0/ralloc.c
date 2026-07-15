@@ -129,32 +129,28 @@ k78k0SpillThis (symbol *sym)
 }
 
 static bool
-operandUsesSymbol (const operand *op, const symbol *sym)
-{
-  return op && IS_SYMOP (op) && OP_SYMBOL_CONST (op) == sym;
-}
-
-static bool
-isRegisterSafeUse (const iCode *ic, const symbol *sym)
-{
-  const unsigned roles =
-    (operandUsesSymbol (IC_LEFT (ic), sym) ? K78K0_ROLE_LEFT : 0) |
-    (operandUsesSymbol (IC_RIGHT (ic), sym) ? K78K0_ROLE_RIGHT : 0) |
-    (operandUsesSymbol (IC_RESULT (ic), sym) ? K78K0_ROLE_RESULT : 0);
-
-  return (roles & k78k0InstructionTraits (ic).safe_roles) != 0;
-}
-
-static bool
-hasRegisterSafeUses (const symbol *sym)
+allUsesRegisterSafe (const symbol *sym)
 {
   for (int key = 0; key < sym->uses->size; key++)
     {
       if (!bitVectBitValue (sym->uses, key))
         continue;
       const iCode *ic = hTabItemWithKey (iCodehTab, key);
+      if (!ic)
+        return false;
 
-      if (!ic || !isRegisterSafeUse (ic, sym))
+      const unsigned roles =
+        (IC_LEFT (ic) && IS_SYMOP (IC_LEFT (ic)) &&
+         OP_SYMBOL_CONST (IC_LEFT (ic)) == sym ? K78K0_ROLE_LEFT : 0) |
+        (IC_RIGHT (ic) && IS_SYMOP (IC_RIGHT (ic)) &&
+         OP_SYMBOL_CONST (IC_RIGHT (ic)) == sym ? K78K0_ROLE_RIGHT : 0) |
+        /* Ordinary results are definitions.  Only pointer stores use RESULT
+           as an input operand. */
+        (POINTER_SET (ic) && IC_RESULT (ic) && IS_SYMOP (IC_RESULT (ic)) &&
+         OP_SYMBOL_CONST (IC_RESULT (ic)) == sym ? K78K0_ROLE_RESULT : 0);
+
+      const unsigned safe_roles = k78k0InstructionTraits (ic).safe_roles;
+      if (!roles || (roles & ~safe_roles))
         return false;
     }
 
@@ -169,6 +165,12 @@ isDirectlyForwardedHiddenResult (const symbol *sym)
 
   iCode *call = hTabItemWithKey (iCodehTab, bitVectFirstBit (sym->defs));
   return call && k78k0HiddenReturnForwardBridge (call, currFunc->type);
+}
+
+static bool
+hasPhysicalStorage (const symbol *sym)
+{
+  return sym->regs[0] || sym->usl.spillLoc;
 }
 
 void
@@ -204,7 +206,7 @@ k78k0_assignRegisters (ebbIndex *ebbi)
       /* Wide lowerings use the fixed AX/BC result registers as scratch, so
          keep values wider than a word in stack storage. */
       sym->for_newralloc = size <= 2 && sym->liveTo > sym->liveFrom &&
-                           bitVectnBitsOn (sym->defs) && hasRegisterSafeUses (sym);
+                           bitVectnBitsOn (sym->defs) && allUsesRegisterSafe (sym);
     }
 
   iCode *ic_head = k78k0_ralloc2_cc (ebbi);
@@ -215,7 +217,7 @@ k78k0_assignRegisters (ebbIndex *ebbi)
       const int size = getSize (sym->type);
 
       if (sym->isitmp && sym->regType != REG_CND && size > 0 && !sym->remat &&
-          !sym->isspilt && !sym->regs[0] &&
+          !hasPhysicalStorage (sym) &&
           (sym->liveTo > sym->liveFrom || size > 4 || IS_STRUCT (sym->type)) &&
           !isDirectlyForwardedHiddenResult (sym))
         k78k0SpillThis (sym);

@@ -114,7 +114,6 @@ enum
   K78K0_BIT_SADDR,
   K78K0_BIT_SFR,
   K78K0_BIT_A,
-  K78K0_BIT_PSW,
   K78K0_BIT_HL
 };
 
@@ -383,9 +382,144 @@ emit_memory_opcode (int kind, struct expr *index, const int opcodes[])
     emit_u8 (index);
 }
 
-static const int mov_a_from_memory[] = { 0x85, 0x87, 0xae, 0xab, 0xaa };
 static const int mov_a_to_memory[] = { 0x95, 0x97, 0xbe, 0xbb, 0xba };
-static const int xch_a_memory[] = { 0x05, 0x07, 0xde, 0x318b, 0x318a };
+
+enum
+{
+  K78K0_OPERAND_DIRECT = K78K0_PSW + 1,
+  K78K0_OPERAND_MEMORY = K78K0_OPERAND_DIRECT + 3,
+  K78K0_OPERAND_IMMEDIATE = K78K0_OPERAND_MEMORY + 5,
+  K78K0_OPERAND_INVALID
+};
+
+struct data_operand
+{
+  int kind;
+  struct expr value;
+};
+
+static struct data_operand
+data_operand (void)
+{
+  struct data_operand operand;
+  int c;
+
+  clrexpr (&operand.value);
+  operand.kind = getreg ();
+  if (operand.kind >= 0)
+    return operand;
+
+  if (parse_immediate (&operand.value))
+    {
+      operand.kind = K78K0_OPERAND_IMMEDIATE;
+      return operand;
+    }
+
+  c = getnb ();
+  unget (c);
+  if (c == '[')
+    {
+      operand.kind = bracket_operand (&operand.value);
+      operand.kind = operand.kind < 0 ? K78K0_OPERAND_INVALID :
+        K78K0_OPERAND_MEMORY + operand.kind;
+    }
+  else
+    operand.kind = K78K0_OPERAND_DIRECT + parse_direct (&operand.value);
+
+  return operand;
+}
+
+static int
+direct_operand_kind (const struct data_operand *operand)
+{
+  return operand->kind >= K78K0_OPERAND_DIRECT &&
+    operand->kind < K78K0_OPERAND_MEMORY ?
+    operand->kind - K78K0_OPERAND_DIRECT : -1;
+}
+
+static int
+memory_operand_kind (const struct data_operand *operand)
+{
+  return operand->kind >= K78K0_OPERAND_MEMORY &&
+    operand->kind < K78K0_OPERAND_IMMEDIATE ?
+    operand->kind - K78K0_OPERAND_MEMORY : -1;
+}
+
+struct accumulator_source_encoding
+{
+  int immediate, reg, psw;
+  int direct[3];
+  int memory[5];
+};
+
+static const struct accumulator_source_encoding mov_a_source = {
+  0xa1, 0x60, 0xf01e, { 0xf0, 0xf4, 0x8e }, { 0x85, 0x87, 0xae, 0xab, 0xaa }
+};
+
+static const struct accumulator_source_encoding xch_a_source = {
+  -1, 0x30, -1, { 0x83, 0x93, 0xce }, { 0x05, 0x07, 0xde, 0x318b, 0x318a }
+};
+
+static void
+emit_accumulator_source (struct data_operand *operand,
+                         const struct accumulator_source_encoding *encoding)
+{
+  int opcode = -1;
+  const int direct = direct_operand_kind (operand);
+  const int memory = memory_operand_kind (operand);
+
+  if (operand->kind == K78K0_OPERAND_IMMEDIATE)
+    opcode = encoding->immediate;
+  else if (is_byte_reg_except_a (operand->kind))
+    opcode = encoding->reg + operand->kind;
+  else if (operand->kind == K78K0_PSW)
+    opcode = encoding->psw;
+  else if (direct >= 0)
+    opcode = encoding->direct[direct];
+  else if (memory >= 0)
+    {
+      emit_memory_opcode (memory, &operand->value, encoding->memory);
+      return;
+    }
+
+  if (opcode < 0)
+    {
+      qerr ();
+      return;
+    }
+
+  emit_opcode (opcode);
+  if (operand->kind == K78K0_OPERAND_IMMEDIATE)
+    emit_u8 (&operand->value);
+  else if (direct >= 0)
+    emit_direct_address (&operand->value, direct, 0);
+}
+
+static void
+emit_direct_move (struct data_operand *dst, struct data_operand *src, int word)
+{
+  const int direct = direct_operand_kind (dst);
+
+  if (src->kind == K78K0_OPERAND_IMMEDIATE)
+    {
+      if (direct == K78K0_DIR_ADDR16)
+        qerr ();
+      outab (direct == K78K0_DIR_SADDR ? (word ? 0xee : 0x11) :
+             (word ? 0xfe : 0x13));
+      emit_direct_address (&dst->value, direct, word);
+      if (word)
+        outrw (&src->value, R_NORM);
+      else
+        emit_u8 (&src->value);
+      return;
+    }
+
+  if (src->kind != (word ? K78K0_AX : K78K0_A))
+    qerr ();
+  emit_direct_opcode (&dst->value, direct, word,
+                      word ? 0x03 : 0x9e, word ? 0x99 : 0xf2,
+                      word ? 0xb9 : 0xf6);
+}
 
 static int
 bit_number (void)
@@ -462,7 +596,8 @@ bit_operand (void)
         }
       if (strcmp (id, "psw") == 0)
         {
-          b.type = K78K0_BIT_PSW;
+          b.type = K78K0_BIT_SADDR;
+          b.addr.e_addr = 0xff1e;
           if (!has_bit)
             b.bit = bit_number ();
           return b;
@@ -483,71 +618,39 @@ bit_operand (void)
 static void
 emit_bit_addr (const struct bit_operand *b)
 {
-  if (b->type == K78K0_BIT_PSW)
-    outab (0x1e);
-  else if (b->type == K78K0_BIT_SADDR)
-    emit_direct_address ((struct expr *)&b->addr, K78K0_DIR_SADDR, 0);
-  else if (b->type == K78K0_BIT_SFR)
-    emit_direct_address ((struct expr *)&b->addr, K78K0_DIR_SFR, 0);
-  else
+  if (b->type != K78K0_BIT_SADDR && b->type != K78K0_BIT_SFR)
     qerr ();
+  else
+    emit_direct_address ((struct expr *)&b->addr,
+                         b->type - K78K0_BIT_SADDR, 0);
 }
 
 static void
-emit_bit_to_cy (const struct bit_operand *b, int low)
-{
-  switch (b->type)
-    {
-    case K78K0_BIT_SADDR:
-    case K78K0_BIT_PSW:
-      outab (0x71);
-      outab ((b->bit << 4) | low);
-      emit_bit_addr (b);
-      break;
-    case K78K0_BIT_SFR:
-      outab (0x71);
-      outab ((b->bit << 4) | 0x08 | low);
-      emit_bit_addr (b);
-      break;
-    case K78K0_BIT_A:
-      outab (0x61);
-      outab (0x80 | (b->bit << 4) | 0x08 | low);
-      break;
-    case K78K0_BIT_HL:
-      outab (0x71);
-      outab (0x80 | (b->bit << 4) | low);
-      break;
-    default:
-      qerr ();
-      break;
-    }
-}
-
-static void
-emit_setclr_bit (const struct bit_operand *b, int low)
+emit_bit_operation (const struct bit_operand *b, int low, int uses_cy)
 {
   switch (b->type)
     {
     case K78K0_BIT_CY:
-      outab (low == 0x0a ? 0x20 : 0x21);
+      if (uses_cy)
+        qerr ();
+      else
+        outab (low == 0x0a ? 0x20 : 0x21);
       break;
     case K78K0_BIT_SADDR:
-    case K78K0_BIT_PSW:
-      outab ((b->bit << 4) | low);
-      emit_bit_addr (b);
-      break;
     case K78K0_BIT_SFR:
-      outab (0x71);
-      outab ((b->bit << 4) | low);
+      if (uses_cy || b->type == K78K0_BIT_SFR)
+        outab (0x71);
+      outab ((b->bit << 4) | low |
+             (uses_cy && b->type == K78K0_BIT_SFR ? 0x08 : 0));
       emit_bit_addr (b);
       break;
     case K78K0_BIT_A:
       outab (0x61);
-      outab (0x80 | (b->bit << 4) | low);
+      outab (0x80 | (b->bit << 4) | low | (uses_cy ? 0x08 : 0));
       break;
     case K78K0_BIT_HL:
       outab (0x71);
-      outab (0x80 | (b->bit << 4) | (low - 0x08));
+      outab (0x80 | (b->bit << 4) | (low - (uses_cy ? 0 : 0x08)));
       break;
     default:
       qerr ();
@@ -564,7 +667,7 @@ emit_bit_branch (const struct bit_operand *b, struct expr *target, int low)
       return;
     }
 
-  if (low == 0x06 && (b->type == K78K0_BIT_SADDR || b->type == K78K0_BIT_PSW))
+  if (low == 0x06 && b->type == K78K0_BIT_SADDR)
     {
       outab (0x8c | (b->bit << 4));
       emit_bit_addr (b);
@@ -576,7 +679,6 @@ emit_bit_branch (const struct bit_operand *b, struct expr *target, int low)
   switch (b->type)
     {
     case K78K0_BIT_SADDR:
-    case K78K0_BIT_PSW:
       outab ((b->bit << 4) | low);
       emit_bit_addr (b);
       break;
@@ -600,78 +702,47 @@ emit_bit_branch (const struct bit_operand *b, struct expr *target, int low)
 static void
 emit_byte_alu (int addr16_opcode)
 {
-  struct expr e;
-  int c;
-  int dst;
+  struct data_operand dst = data_operand ();
+  const int direct = direct_operand_kind (&dst);
 
-  clrexpr (&e);
-
-  dst = getreg ();
-
-  if (dst == K78K0_A)
+  if (dst.kind == K78K0_A)
     {
+      const struct accumulator_source_encoding encoding = {
+        addr16_opcode + 0x05,
+        0x6100 + addr16_opcode,
+        -1,
+        { addr16_opcode + 0x06, -1, addr16_opcode },
+        { -1, addr16_opcode + 0x07, addr16_opcode + 0x01,
+          0x3100 | (addr16_opcode + 0x03),
+          0x3100 | (addr16_opcode + 0x02) }
+      };
+      struct data_operand src;
+
       comma (1);
-      if (parse_immediate (&e))
-        {
-          outab (addr16_opcode + 0x05);
-          emit_u8 (&e);
-        }
-      else if ((c = getnb ()) == '[')
-        {
-          const int opcodes[] = {
-            -1,
-            addr16_opcode + 0x07,
-            addr16_opcode + 0x01,
-            0x3100 | (addr16_opcode + 0x03),
-            0x3100 | (addr16_opcode + 0x02)
-          };
-
-          unget ('[');
-          emit_memory_opcode (bracket_operand (&e), &e, opcodes);
-        }
-      else
-        {
-          char *p;
-          int src;
-
-          unget (c);
-          p = ip;
-          src = getreg ();
-          if (is_byte_reg_except_a (src))
-            {
-              outab (0x61);
-              outab (addr16_opcode + src);
-            }
-          else
-            {
-              ip = p;
-              const int kind = parse_direct (&e);
-              emit_direct_opcode (&e, kind, 0, addr16_opcode, addr16_opcode + 0x06, -1);
-            }
-        }
+      src = data_operand ();
+      emit_accumulator_source (&src, &encoding);
     }
-  else if (is_byte_reg_except_a (dst))
+  else if (is_byte_reg_except_a (dst.kind))
     {
       comma (1);
-      c = getnb ();
-      if (c != 'a')
+      if (getnb () != 'a')
         qerr ();
       outab (0x61);
-      outab (addr16_opcode - 0x08 + dst);
+      outab (addr16_opcode - 0x08 + dst.kind);
     }
-  else if (dst < 0)
+  else if (direct >= 0)
     {
-      struct expr imm;
+      struct data_operand src;
 
-      clrexpr (&imm);
-      if (parse_direct (&e) != K78K0_DIR_SADDR)
+      if (direct != K78K0_DIR_SADDR)
         qerr ();
       comma (1);
-      if (!parse_immediate (&imm))
+      src = data_operand ();
+      if (src.kind != K78K0_OPERAND_IMMEDIATE)
         qerr ();
       outab (addr16_opcode + 0x80);
-      emit_direct_address (&e, K78K0_DIR_SADDR, 0);
-      emit_u8 (&imm);
+      emit_direct_address (&dst.value, K78K0_DIR_SADDR, 0);
+      emit_u8 (&src.value);
     }
   else
     qerr ();
@@ -732,7 +803,7 @@ machine (struct mne *mp)
     case S_78K0_BIT1:
       {
         struct bit_operand bit = bit_operand ();
-        emit_setclr_bit (&bit, mp->m_valu);
+        emit_bit_operation (&bit, mp->m_valu, 0);
       }
       break;
 
@@ -744,14 +815,14 @@ machine (struct mne *mp)
         if (dst_bit.type == K78K0_BIT_CY)
           {
             struct bit_operand src_bit = bit_operand ();
-            emit_bit_to_cy (&src_bit, mp->m_valu);
+            emit_bit_operation (&src_bit, mp->m_valu, 1);
           }
         else if (mp->m_valu == 0x04)
           {
             struct bit_operand src_bit = bit_operand ();
             if (src_bit.type != K78K0_BIT_CY)
               qerr ();
-            emit_bit_to_cy (&dst_bit, 0x01);
+            emit_bit_operation (&dst_bit, 0x01, 1);
           }
         else
           qerr ();
@@ -774,42 +845,42 @@ machine (struct mne *mp)
       break;
 
     case S_78K0_DBNZ:
-      p = ip;
-      dst = getreg ();
+      {
+        struct data_operand operand = data_operand ();
 
-      if (dst == K78K0_C || dst == K78K0_B)
-        {
-          comma (1);
-          expr (&e, 0);
-          outab (dst == K78K0_C ? 0x8a : 0x8b);
-          emit_relative_byte (&e);
-        }
-      else
-        {
-          ip = p;
-          if (parse_direct (&e) != K78K0_DIR_SADDR)
-            qerr ();
-          comma (1);
-          outab (0x04);
-          emit_direct_address (&e, K78K0_DIR_SADDR, 0);
-          expr (&e, 0);
-          emit_relative_byte (&e);
-        }
+        if (operand.kind == K78K0_C || operand.kind == K78K0_B)
+          {
+            comma (1);
+            expr (&e, 0);
+            outab (operand.kind == K78K0_C ? 0x8a : 0x8b);
+          }
+        else
+          {
+            if (direct_operand_kind (&operand) != K78K0_DIR_SADDR)
+              qerr ();
+            comma (1);
+            outab (0x04);
+            emit_direct_address (&operand.value, K78K0_DIR_SADDR, 0);
+            expr (&e, 0);
+          }
+        emit_relative_byte (&e);
+      }
       break;
 
     case S_78K0_INCDEC:
-      p = ip;
-      dst = getreg ();
-      if (is_byte_reg (dst))
-        outab (((mp->m_valu >> 8) & 0xff) + dst);
-      else
-        {
-          ip = p;
-          if (parse_direct (&e) != K78K0_DIR_SADDR)
-            qerr ();
-          outab (mp->m_valu & 0xff);
-          emit_direct_address (&e, K78K0_DIR_SADDR, 0);
-        }
+      {
+        struct data_operand operand = data_operand ();
+
+        if (is_byte_reg (operand.kind))
+          outab (((mp->m_valu >> 8) & 0xff) + operand.kind);
+        else
+          {
+            if (direct_operand_kind (&operand) != K78K0_DIR_SADDR)
+              qerr ();
+            outab (mp->m_valu & 0xff);
+            emit_direct_address (&operand.value, K78K0_DIR_SADDR, 0);
+          }
+      }
       break;
 
     case S_78K0_INCWDECW:
@@ -823,178 +894,103 @@ machine (struct mne *mp)
       break;
 
     case S_78K0_MOV:
-      dst = getreg ();
+      {
+        struct data_operand dst_operand = data_operand ();
+        struct data_operand src_operand;
+        const int dst_direct = direct_operand_kind (&dst_operand);
+        const int dst_memory = memory_operand_kind (&dst_operand);
 
-      if (dst == K78K0_A)
-        {
-          comma (1);
-          if (parse_immediate (&e))
-            {
-              outab (0xa1);
-              emit_u8 (&e);
-            }
-          else if ((c = getnb ()) == '[')
-            {
-              unget ('[');
-              emit_memory_opcode (bracket_operand (&e), &e, mov_a_from_memory);
-            }
-          else
-            {
-              char *p;
-
-              unget (c);
-              p = ip;
-              src = getreg ();
-              if (is_byte_reg_except_a (src))
-                outab (0x60 + src);
-              else if (src == K78K0_PSW)
-                emit_opcode (0xf01e);
-              else if (src < 0)
-                {
-                  int kind;
-
-                  ip = p;
-                  kind = parse_direct (&e);
-                  emit_direct_opcode (&e, kind, 0, 0x8e, 0xf0, 0xf4);
-                }
-              else
-                qerr ();
-            }
-        }
-      else if (dst == K78K0_PSW)
-        {
-          comma (1);
-          if (parse_immediate (&e))
-            {
-              emit_opcode (0x111e);
-              emit_u8 (&e);
-            }
-          else
-            {
-              expect_reg (K78K0_A);
-              emit_opcode (0xf21e);
-            }
-        }
-      else if (is_byte_reg_except_a (dst))
-        {
-          comma (1);
-          if (parse_immediate (&e))
-            {
-              outab (0xa0 + dst);
-              emit_u8 (&e);
-            }
-          else
-            {
-              expect_reg (K78K0_A);
-              outab (0x70 + dst);
-            }
-        }
-      else if (dst < 0)
-        {
-          struct expr addr, imm;
-          int kind;
-
-          c = getnb ();
-
-          if (c == '[')
-            {
-              unget ('[');
-              emit_memory_opcode (bracket_operand (&e), &e, mov_a_to_memory);
-              comma (1);
-              expect_reg (K78K0_A);
-              break;
-            }
-
-          unget (c);
-          clrexpr (&addr);
-          clrexpr (&imm);
-          kind = parse_direct (&addr);
-          comma (1);
-          if (parse_immediate (&imm))
-            {
-              if (kind == K78K0_DIR_ADDR16)
-                qerr ();
-              outab (kind == K78K0_DIR_SADDR ? 0x11 : 0x13);
-              emit_direct_address (&addr, kind, 0);
-              emit_u8 (&imm);
-            }
-          else
-            {
-              expect_reg (K78K0_A);
-              emit_direct_opcode (&addr, kind, 0, 0x9e, 0xf2, 0xf6);
-            }
-        }
-      else
-        qerr ();
+        comma (1);
+        src_operand = data_operand ();
+        if (dst_operand.kind <= K78K0_PSW)
+          {
+            if (dst_operand.kind == K78K0_A)
+              emit_accumulator_source (&src_operand, &mov_a_source);
+            else if (dst_operand.kind == K78K0_PSW ||
+                     is_byte_reg_except_a (dst_operand.kind))
+              {
+                if (src_operand.kind == K78K0_OPERAND_IMMEDIATE)
+                  {
+                    emit_opcode (dst_operand.kind == K78K0_PSW ?
+                                 0x111e : 0xa0 + dst_operand.kind);
+                    emit_u8 (&src_operand.value);
+                  }
+                else
+                  {
+                    if (src_operand.kind != K78K0_A)
+                      qerr ();
+                    emit_opcode (dst_operand.kind == K78K0_PSW ?
+                                 0xf21e : 0x70 + dst_operand.kind);
+                  }
+              }
+            else
+              qerr ();
+          }
+        else if (dst_memory >= 0)
+          {
+            if (src_operand.kind != K78K0_A)
+              qerr ();
+            emit_memory_opcode (dst_memory, &dst_operand.value,
+                                mov_a_to_memory);
+          }
+        else if (dst_direct >= 0)
+          emit_direct_move (&dst_operand, &src_operand, 0);
+        else
+          qerr ();
+      }
       break;
 
     case S_78K0_MOVW:
-      dst = getreg ();
+      {
+        struct data_operand dst_operand = data_operand ();
+        struct data_operand src_operand;
+        const int dst_direct = direct_operand_kind (&dst_operand);
+        int pair;
 
-      if (dst >= 0)
-        {
-          comma (1);
-          src = getreg ();
+        comma (1);
+        src_operand = data_operand ();
+        if (dst_operand.kind <= K78K0_PSW)
+          {
+            const int src_direct = direct_operand_kind (&src_operand);
 
-          if (src < 0)
-            {
-              if (parse_immediate (&e))
-                {
-                  if ((c = regpair_code (dst)) >= 0)
-                    outab (0x10 + (c << 1));
-                  else if (dst == K78K0_SP)
-                    emit_opcode (0xee1c);
-                  else
-                    {
-                      qerr ();
-                      break;
-                    }
-                  outrw (&e, R_NORM);
-                }
-              else if (dst == K78K0_AX)
-                {
-                  int kind;
-
-                  kind = parse_direct (&e);
-                  emit_direct_opcode (&e, kind, 1, 0x02, 0x89, 0xa9);
-                }
-              else
-                qerr ();
-            }
-          else if (dst == K78K0_AX && src == K78K0_SP)
-            emit_opcode (0xa91c);
-          else if (dst == K78K0_AX && (c = regpair_code (src)) >= 1)
-            outab (0xc0 + (c << 1));
-          else if (src == K78K0_AX && (c = regpair_code (dst)) >= 1)
-            outab (0xd0 + (c << 1));
-          else if (dst == K78K0_SP && src == K78K0_AX)
-            emit_opcode (0xb91c);
-          else
-            qerr ();
-        }
-      else
-        {
-          struct expr addr, imm;
-          int kind;
-
-          clrexpr (&addr);
-          clrexpr (&imm);
-          kind = parse_direct (&addr);
-          comma (1);
-          if (parse_immediate (&imm))
-            {
-              if (kind == K78K0_DIR_ADDR16)
-                qerr ();
-              outab (kind == K78K0_DIR_SADDR ? 0xee : 0xfe);
-              emit_direct_address (&addr, kind, 1);
-              outrw (&imm, R_NORM);
-            }
-          else
-            {
-              expect_reg (K78K0_AX);
-              emit_direct_opcode (&addr, kind, 1, 0x03, 0x99, 0xb9);
-            }
-        }
+            if (src_operand.kind == K78K0_OPERAND_IMMEDIATE)
+              {
+                pair = regpair_code (dst_operand.kind);
+                if (pair >= 0)
+                  outab (0x10 + (pair << 1));
+                else if (dst_operand.kind == K78K0_SP)
+                  emit_opcode (0xee1c);
+                else
+                  {
+                    qerr ();
+                    break;
+                  }
+                outrw (&src_operand.value, R_NORM);
+              }
+            else if (dst_operand.kind == K78K0_AX &&
+                     src_direct >= 0)
+              emit_direct_opcode (&src_operand.value, src_direct, 1,
+                                  0x02, 0x89, 0xa9);
+            else if (dst_operand.kind == K78K0_AX &&
+                     src_operand.kind == K78K0_SP)
+              emit_opcode (0xa91c);
+            else if (dst_operand.kind == K78K0_AX &&
+                     (pair = regpair_code (src_operand.kind)) >= 1)
+              outab (0xc0 + (pair << 1));
+            else if (src_operand.kind == K78K0_AX &&
+                     (pair = regpair_code (dst_operand.kind)) >= 1)
+              outab (0xd0 + (pair << 1));
+            else if (dst_operand.kind == K78K0_SP &&
+                     src_operand.kind == K78K0_AX)
+              emit_opcode (0xb91c);
+            else
+              qerr ();
+          }
+        else if (dst_direct >= 0)
+          emit_direct_move (&dst_operand, &src_operand, 1);
+        else
+          qerr ();
+      }
       break;
 
     case S_78K0_STACK:
@@ -1079,28 +1075,10 @@ machine (struct mne *mp)
     case S_78K0_XCH:
       expect_reg (K78K0_A);
       comma (1);
-      c = getnb ();
-      if (c == '[')
-        {
-          unget ('[');
-          emit_memory_opcode (bracket_operand (&e), &e, xch_a_memory);
-        }
-      else
-        {
-          unget (c);
-          p = ip;
-          src = getreg ();
-          if (is_byte_reg_except_a (src))
-            outab (0x30 + src);
-          else
-            {
-              int kind;
-
-              ip = p;
-              kind = parse_direct (&e);
-              emit_direct_opcode (&e, kind, 0, 0xce, 0x83, 0x93);
-            }
-        }
+      {
+        struct data_operand operand = data_operand ();
+        emit_accumulator_source (&operand, &xch_a_source);
+      }
       break;
 
     case S_78K0_XCHW:

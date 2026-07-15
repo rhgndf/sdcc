@@ -22,43 +22,24 @@ static void add_operand_conflicts_in_node (const cfg_node &, I_t &) {}
 static constexpr reg_t spilled_register = -1;
 static constexpr reg_t unknown_register = -2;
 
-struct register_layout
-{
-  reg_t bytes[2];
-  int size;
-};
-
 static bool
-layout_completable (const register_layout &layout)
+valid_register_pair (reg_t low, reg_t high)
 {
-  if (layout.size == 1)
-    return layout.bytes[0] >= unknown_register &&
-      layout.bytes[0] <= K78K0_RB0_H_IDX;
-  if (layout.size != 2)
-    return false;
-
-  const auto matches = [&layout](reg_t low, reg_t high)
-  {
-    return (layout.bytes[0] == unknown_register || layout.bytes[0] == low) &&
-      (layout.bytes[1] == unknown_register || layout.bytes[1] == high);
-  };
-
-  if (matches (spilled_register, spilled_register))
-    return true;
-
-  for (reg_t low = K78K0_RB0_X_IDX; low <= K78K0_RB0_L_IDX; low += 2)
-    if (matches (low, low + 1))
-      return true;
-
-  return false;
+  return low == spilled_register ? high == spilled_register :
+    low >= K78K0_RB0_X_IDX && low <= K78K0_RB0_L_IDX && !(low & 1) &&
+    high == low + 1;
 }
 
 static bool
-legal_layout (const register_layout &layout)
+register_pair_completable (reg_t low, reg_t high)
 {
-  return layout.bytes[0] != unknown_register &&
-    (layout.size == 1 || layout.bytes[1] != unknown_register) &&
-    layout_completable (layout);
+  if (low == unknown_register)
+    return high == unknown_register || high == spilled_register ||
+      high >= K78K0_RB0_A_IDX && high <= K78K0_RB0_H_IDX && (high & 1);
+  if (high == unknown_register)
+    return low == spilled_register ||
+      low >= K78K0_RB0_X_IDX && low <= K78K0_RB0_L_IDX && !(low & 1);
+  return valid_register_pair (low, high);
 }
 
 static bool
@@ -103,19 +84,67 @@ operand_sane (const operand *op, unsigned forbidden, const assignment &a,
   if (range.first == range.second)
     return true;
 
-  register_layout layout =
-    {{spilled_register, spilled_register}, I[range.first->second].size};
+  const int size = I[range.first->second].size;
+  reg_t registers_by_byte[2] = {spilled_register, spilled_register};
   unsigned registers = 0;
   for (auto entry = range.first; entry != range.second; ++entry)
     {
       const reg_t reg = a.global[entry->second];
 
-      layout.bytes[I[entry->second].byte] = reg;
+      registers_by_byte[I[entry->second].byte] = reg;
       if (reg >= 0)
         registers |= 1u << reg;
     }
 
-  return legal_layout (layout) && !(registers & forbidden);
+  const bool layout_sane = size == 1 ?
+    registers_by_byte[0] == spilled_register ||
+      registers_by_byte[0] >= K78K0_RB0_X_IDX &&
+      registers_by_byte[0] <= K78K0_RB0_H_IDX :
+    size == 2 && valid_register_pair (registers_by_byte[0], registers_by_byte[1]);
+
+  return layout_sane && !(registers & forbidden);
+}
+
+template <class G_t, class I_t>
+static bool
+value_survives (var_t v, unsigned short i, const G_t &G, const I_t &I)
+{
+  const iCode *ic = G[i].ic;
+
+  return G[i].dying.find (v) == G[i].dying.end () &&
+    (POINTER_SET (ic) || !operand_is_symbol (IC_RESULT (ic), I[v].v));
+}
+
+template <class G_t, class I_t>
+static unsigned
+surviving_registers (const assignment &a, unsigned short i, const G_t &G,
+                     const I_t &I)
+{
+  unsigned survivors = 0;
+
+  for (var_t v : G[i].alive)
+    if (a.global[v] >= 0 && value_survives (v, i, G, I))
+      survivors |= 1u << a.global[v];
+  return survivors;
+}
+
+template <class G_t, class I_t>
+static void
+set_surviving_regs (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
+{
+  iCode *ic = G[i].ic;
+
+  bitVectClear (ic->rMask);
+  bitVectClear (ic->rSurv);
+  for (var_t v : G[i].alive)
+    if (a.global[v] >= 0)
+      {
+        const unsigned reg = a.global[v];
+
+        ic->rMask = bitVectSetBit (ic->rMask, reg);
+        if (value_survives (v, i, G, I))
+          ic->rSurv = bitVectSetBit (ic->rSurv, reg);
+      }
 }
 
 template <class G_t, class I_t>
@@ -146,36 +175,10 @@ inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
   if (POINTER_SET (ic))
     constraints.result |= hl_clobbers;
 
-  if (!operand_sane (IC_LEFT (ic), constraints.left, a, i, G, I) ||
-      !operand_sane (IC_RIGHT (ic), constraints.right, a, i, G, I) ||
-      !operand_sane (IC_RESULT (ic), constraints.result, a, i, G, I))
-    return false;
-
-  for (var_t v : G[i].alive)
-    if (a.global[v] >= 0 && G[i].dying.find (v) == G[i].dying.end () &&
-        (POINTER_SET (ic) || !operand_is_symbol (IC_RESULT (ic), I[v].v)) &&
-        (clobbers & (1u << a.global[v])))
-      return false;
-
-  return true;
-}
-
-template <class G_t, class I_t>
-static void
-set_surviving_regs (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
-{
-  iCode *ic = G[i].ic;
-
-  bitVectClear (ic->rMask);
-  bitVectClear (ic->rSurv);
-  for (var_t v : G[i].alive)
-    if (a.global[v] >= 0)
-      {
-        ic->rMask = bitVectSetBit (ic->rMask, a.global[v]);
-        if (G[i].dying.find (v) == G[i].dying.end () &&
-            (POINTER_SET (ic) || !operand_is_symbol (IC_RESULT (ic), I[v].v)))
-          ic->rSurv = bitVectSetBit (ic->rSurv, a.global[v]);
-      }
+  return operand_sane (IC_LEFT (ic), constraints.left, a, i, G, I) &&
+    operand_sane (IC_RIGHT (ic), constraints.right, a, i, G, I) &&
+    operand_sane (IC_RESULT (ic), constraints.result, a, i, G, I) &&
+    !(surviving_registers (a, i, G, I) & clobbers);
 }
 
 template <class G_t, class I_t>
@@ -192,9 +195,6 @@ assign_operand_for_cost (operand *op, const assignment &a, unsigned short i,
     return;
 
   const int size = I[range.first->second].size;
-  bool has_register = false;
-  bool has_spill = false;
-
   sym->nRegs = size;
   std::fill (sym->regs, sym->regs + size, static_cast<reg_info *> (NULL));
   for (auto entry = range.first; entry != range.second; ++entry)
@@ -203,13 +203,24 @@ assign_operand_for_cost (operand *op, const assignment &a, unsigned short i,
       const reg_t reg = a.global[v];
 
       sym->regs[I[v].byte] = reg >= 0 ? k78k0_regs + reg : NULL;
-      has_register |= reg >= 0;
-      has_spill |= reg < 0;
     }
 
+  const bool has_register = sym->regs[0] || size == 2 && sym->regs[1];
+  const bool has_spill = !sym->regs[0] || size == 2 && !sym->regs[1];
   sym->isspilt = has_spill && !has_register;
   sym->spillA = has_spill;
   sym->stackSpil = has_spill && !sym->remat;
+}
+
+template <class G_t>
+static unsigned short
+next_instruction (unsigned short i, const G_t &G)
+{
+  const unsigned short next = i + 1;
+
+  wassert (next < boost::num_vertices (G));
+  wassert (G[next].ic == G[i].ic->next);
+  return next;
 }
 
 template <class G_t, class I_t>
@@ -230,28 +241,14 @@ assign_operands_for_cost (const assignment &a, unsigned short i, const G_t &G,
       assign_operand_for_cost (IC_RESULT (ic), a, i, G, I);
     }
 
-  const iCode *next = ic->next;
-  if (next && next->op == '=' && !POINTER_SET (next) && IC_RESULT (ic) &&
-      IS_ITEMP (IC_RESULT (ic)) && IC_RIGHT (next) && IS_ITEMP (IC_RIGHT (next)) &&
-      OP_SYMBOL_CONST (IC_RESULT (ic)) == OP_SYMBOL_CONST (IC_RIGHT (next)))
+  if (iCode *next = k78k0AdjacentAssignment (ic))
     {
-      const auto adjacent = adjacent_vertices (i, G);
-
-      for (auto node = adjacent.first; node != adjacent.second; ++node)
-        if (G[*node].ic == next)
-          {
-            assign_operand_for_cost (IC_RESULT (next), a, (unsigned short)*node, G, I);
-            break;
-          }
+      const unsigned short next_i = next_instruction (i, G);
+      assign_operand_for_cost (IC_RESULT (next), a, next_i, G, I);
     }
 
   if (ic->op == SEND && ic->builtinSEND)
-    {
-      const auto adjacent = adjacent_vertices (i, G);
-
-      if (adjacent.first != adjacent.second)
-        assign_operands_for_cost (a, (unsigned short)*adjacent.first, G, I);
-    }
+    assign_operands_for_cost (a, next_instruction (i, G), G, I);
 }
 
 static bool
@@ -286,18 +283,21 @@ assignment_hopeless (const assignment &a, unsigned short, const G_t &, const I_t
 {
   const int size = I[lastvar].size;
   const var_t first = lastvar - I[lastvar].byte;
-  register_layout layout =
-    {{unknown_register, unknown_register}, size};
+  reg_t registers_by_byte[2] = {unknown_register, unknown_register};
 
   for (int byte = 0; byte < size; byte++)
     {
       const var_t v = first + byte;
 
       if (std::binary_search (a.local.begin (), a.local.end (), v))
-        layout.bytes[byte] = a.global[v];
+        registers_by_byte[byte] = a.global[v];
     }
 
-  return !layout_completable (layout);
+  if (size == 1)
+    return registers_by_byte[0] < unknown_register ||
+      registers_by_byte[0] > K78K0_RB0_H_IDX;
+  return size != 2 ||
+    !register_pair_completable (registers_by_byte[0], registers_by_byte[1]);
 }
 
 template <class G_t, class I_t>
@@ -321,6 +321,10 @@ get_best_local_assignment_biased (assignment &a,
                                   typename boost::graph_traits<T_t>::vertex_descriptor t,
                                   const T_t &T)
 {
+  /* An empty child makes the later join empty as well; the caller's default
+     context is sufficient while the sibling is visited. */
+  if (T[t].assignments.empty ())
+    return;
   a = *T[t].assignments.begin ();
   varset_t local;
   std::set_union (T[t].alive.begin (), T[t].alive.end (), a.local.begin (), a.local.end (),
@@ -390,7 +394,7 @@ allocate (T_t &T, G_t &G, const I_t &I)
     {
       symbol *sym = static_cast<symbol *> (hTabItemWithKey (liveRanges, I[v].v));
       const int size = I[v].size;
-      bool spilled = false;
+      const bool spilled = winner.global[v] < 0;
 
       sym->nRegs = size;
       for (int byte = 0; byte < size; byte++)
@@ -398,7 +402,6 @@ allocate (T_t &T, G_t &G, const I_t &I)
           const reg_t reg = winner.global[v + byte];
 
           sym->regs[byte] = reg >= 0 ? k78k0_regs + reg : NULL;
-          spilled |= reg < 0;
         }
 
       if (spilled)

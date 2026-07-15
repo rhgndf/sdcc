@@ -125,12 +125,6 @@ moveAXToHL (void)
   clearHLState ();
 }
 
-static void
-clearRegisterState (void)
-{
-  clearHLState ();
-}
-
 static bool
 storeAToOperandByte (const operand *op, int offset);
 
@@ -302,7 +296,7 @@ makeICLabel (char *buf, size_t buflen, const symbol *label)
 static void
 emitLocalLabel (const char *label)
 {
-  clearRegisterState ();
+  clearHLState ();
   emit2 ("", "%s:", label);
   if (!regalloc_dry_run)
     genLine.lineCurr->isLabel = 1;
@@ -372,7 +366,7 @@ stackByteOffset (const symbol *sym, const int offset)
 static bool
 loadSymbolAddressToAX (const symbol *sym, const long offset)
 {
-  clearRegisterState ();
+  clearHLState ();
 
   if (sym->onStack)
     {
@@ -412,8 +406,6 @@ setStackAddress (const int stack_offset, const stack_address_preservation preser
 
   if (preserve == K78K0_PRESERVE_AX)
     moveAXToHL ();
-  else
-    clearRegisterState ();
 
   emit2 ("movw", "ax,sp");
   adjustAX (stack_offset);
@@ -571,7 +563,7 @@ adjustHardwareStackPointer (const int amount, const bool leave_hl_sp)
 {
   bool ax_is_sp = false;
 
-  clearRegisterState ();
+  clearHLState ();
 
   if (amount == -1)
     emit2 ("push", "psw");
@@ -745,22 +737,6 @@ restoreScalarAcrossStackAdjustment (const int size)
 }
 
 static void
-resetFunctionState (void)
-{
-  memset (&G, 0, sizeof G);
-}
-
-static k78k0_instruction_traits
-fixedInstructionTraits (const unsigned clobbers, const unsigned left,
-                        const unsigned right)
-{
-  const k78k0_instruction_traits traits =
-    {clobbers, left, right, 0, 0, 0};
-
-  return traits;
-}
-
-static void
 allowByteAccumulatorOperands (k78k0_instruction_traits *traits,
                               const int left_size, const int right_size)
 {
@@ -784,29 +760,37 @@ k78k0InstructionTraits (const iCode *ic)
     case ENDCRITICAL:
     case GOTO:
     case LABEL:
-      return fixedInstructionTraits (0, K78K0_MASK_ALL, K78K0_MASK_ALL);
+      return (k78k0_instruction_traits)
+        {.left = K78K0_MASK_ALL, .right = K78K0_MASK_ALL};
     case RETURN:
-      return fixedInstructionTraits (K78K0_MASK_HL, 0, K78K0_MASK_ALL);
+      return (k78k0_instruction_traits)
+        {.clobbers = K78K0_MASK_HL, .right = K78K0_MASK_ALL};
     case ADDRESS_OF:
-      return fixedInstructionTraits (K78K0_MASK_AX, K78K0_MASK_ALL,
-                                     K78K0_MASK_ALL);
+      return (k78k0_instruction_traits)
+        {.clobbers = K78K0_MASK_AX, .left = K78K0_MASK_ALL,
+         .right = K78K0_MASK_ALL};
     case GETBYTE:
     case GETABIT:
-      return fixedInstructionTraits (K78K0_MASK_AX, 0, K78K0_MASK_ALL);
+      return (k78k0_instruction_traits)
+        {.clobbers = K78K0_MASK_AX, .right = K78K0_MASK_ALL};
     case GETWORD:
-      return fixedInstructionTraits (K78K0_MASK_AX | (1u << K78K0_RB0_D_IDX),
-                                     0, K78K0_MASK_ALL);
+      return (k78k0_instruction_traits)
+        {.clobbers = K78K0_MASK_AX | (1u << K78K0_RB0_D_IDX),
+         .right = K78K0_MASK_ALL};
     case DUMMY_READ_VOLATILE:
-      return fixedInstructionTraits (K78K0_MASK_AX, 0, 0);
+      return (k78k0_instruction_traits){.clobbers = K78K0_MASK_AX};
     case IPUSH:
-      return fixedInstructionTraits (K78K0_MASK_AX | K78K0_MASK_C | K78K0_MASK_HL,
-                                     0, K78K0_MASK_ALL);
+      return (k78k0_instruction_traits)
+        {.clobbers = K78K0_MASK_AX | K78K0_MASK_C | K78K0_MASK_HL,
+         .right = K78K0_MASK_ALL};
     case SEND:
-      return fixedInstructionTraits (K78K0_MASK_AX | K78K0_MASK_BC | K78K0_MASK_HL,
-                                     0, K78K0_MASK_ALL);
+      return (k78k0_instruction_traits)
+        {.clobbers = K78K0_MASK_AX | K78K0_MASK_BC | K78K0_MASK_HL,
+         .right = K78K0_MASK_ALL};
     case RECEIVE:
-      return fixedInstructionTraits (K78K0_MASK_AX | K78K0_MASK_BC | K78K0_MASK_HL,
-                                     K78K0_MASK_ALL, K78K0_MASK_ALL);
+      return (k78k0_instruction_traits)
+        {.clobbers = K78K0_MASK_AX | K78K0_MASK_BC | K78K0_MASK_HL,
+         .left = K78K0_MASK_ALL, .right = K78K0_MASK_ALL};
     default:
       break;
     }
@@ -1051,7 +1035,6 @@ functionReturnSize (sym_link *type)
 static void
 moveReturnAddressForCalleeCleanup (const int cleanup_bytes, const bool use_pops)
 {
-  clearRegisterState ();
   emit2 ("pop", "hl");
   clearHLState ();
   if (use_pops)
@@ -1129,7 +1112,7 @@ genFunction (const iCode *ic)
   const asmop *first_argument = aopArg (type, 1);
   const int first_regarg_size = first_argument ? first_argument->size : 0;
 
-  resetFunctionState ();
+  memset (&G, 0, sizeof G);
   G.stack.saved_de_bytes = functionNeedsDESave (ic, type, first_regarg_size) ? 2 : 0;
   G.stack.local_size = frame_local_size + G.stack.saved_de_bytes;
   emit2 ("", "%s:", sym->rname);
@@ -1206,7 +1189,7 @@ genEndFunction (const iCode *ic)
 
   if (IFFUNC_ISNAKED (type))
     {
-      resetFunctionState ();
+      memset (&G, 0, sizeof G);
       emit2 (";", "naked function: no epilogue.");
       return;
     }
@@ -1224,7 +1207,7 @@ genEndFunction (const iCode *ic)
                 "78K0 wide return requires a saved DE pair.");
       emitWideRegisterReturnEpilogue (frame_local_size, cleanup_size);
       wassertl (G.stack.pushed == 0, "78K0 unbalanced outgoing stack.");
-      resetFunctionState ();
+      memset (&G, 0, sizeof G);
       emit2 ("ret", "");
       return;
     }
@@ -1260,7 +1243,7 @@ genEndFunction (const iCode *ic)
     }
 
   wassertl (G.stack.pushed == 0, "78K0 unbalanced outgoing stack.");
-  resetFunctionState ();
+  memset (&G, 0, sizeof G);
   if (is_isr)
     {
       emit2 ("pop", "hl");
@@ -1283,7 +1266,7 @@ genLabel (const iCode *ic)
   if (IC_LABEL (ic) == entryLabel)
     return;
 
-  clearRegisterState ();
+  clearHLState ();
   makeICLabel (label, sizeof (label), IC_LABEL (ic));
   emit2 ("", "%s:", label);
   if (!regalloc_dry_run)
@@ -1297,20 +1280,12 @@ genGoto (const iCode *ic)
 
   makeICLabel (label, sizeof (label), IC_LABEL (ic));
   emit2 ("br", "!%s", label);
-  clearRegisterState ();
-}
-
-static void
-genInlineAsm (iCode *ic)
-{
-  genInline (ic);
-  clearRegisterState ();
+  clearHLState ();
 }
 
 static void
 genCritical (void)
 {
-  clearRegisterState ();
   pushPSW ();
   emit2 ("di", "");
 }
@@ -1318,7 +1293,6 @@ genCritical (void)
 static void
 genEndCritical (void)
 {
-  clearRegisterState ();
   popPSW ();
 }
 
@@ -3226,7 +3200,7 @@ pushBigReturnAddress (const operand *result)
 
   emit2 ("push", "ax");
   G.stack.pushed += 2;
-  clearRegisterState ();
+  clearHLState ();
   return true;
 }
 
@@ -3328,7 +3302,7 @@ pushEnclosingHiddenReturnAddress (const bool preserve_ax)
     emit2 ("push", "ax");
 
   G.stack.pushed += 2;
-  clearRegisterState ();
+  clearHLState ();
   return true;
 }
 
@@ -3343,7 +3317,7 @@ finishHiddenReturnForwarding (iCode *address)
   markGenerated (ret);
   makeICLabel (label, sizeof (label), returnLabel);
   emit2 ("br", "!%s", label);
-  clearRegisterState ();
+  clearHLState ();
 }
 
 static bool
@@ -3419,7 +3393,7 @@ genCall (iCode *ic)
   if (!makeCallPlan (&plan, ic, CALL))
     return false;
 
-  clearRegisterState ();
+  clearHLState ();
 
   if (plan.hidden_return)
     {
@@ -3484,7 +3458,6 @@ genPcall (iCode *ic)
 
   moveAXToHL ();
   makeLocalLabel (return_label, sizeof (return_label));
-  clearRegisterState ();
   emit2 ("movw", "ax,#%s", return_label);
   emit2 ("push", "ax");
   emit2 ("push", "hl");
@@ -3632,7 +3605,7 @@ loadAddressOperandToPair (const operand *op, const char *pair, long offset)
         return false;
 
       if (!strcmp (pair, "ax"))
-        clearRegisterState ();
+        clearHLState ();
       if (offset)
         emit2 ("movw", "%s,#%s + %ld", pair, base->rname, offset);
       else
@@ -3940,7 +3913,7 @@ genPointerSetBitField (const operand *ptr, const operand *value, sym_link *type)
         emit2 ("incw", "de");
     }
 
-  clearRegisterState ();
+  clearHLState ();
   return true;
 }
 
@@ -4764,7 +4737,7 @@ genJumpTable (const iCode *ic)
       emit2 (".dw", "%s", target_label);
     }
 
-  clearRegisterState ();
+  clearHLState ();
   return true;
 }
 
@@ -4799,7 +4772,7 @@ genIpush (const iCode *ic)
 
       emit2 ("push", "ax");
       G.stack.pushed += 2;
-      clearRegisterState ();
+      clearHLState ();
       return true;
     }
 
@@ -4838,7 +4811,7 @@ emitBlockCopyDEToHL (const int size)
               clearHLState ();
             }
         }
-      clearRegisterState ();
+      clearHLState ();
       return true;
     }
 
@@ -4864,7 +4837,7 @@ emitBlockCopyDEToHL (const int size)
       emit2 ("bnz", "%s", copy_label);
     }
 
-  clearRegisterState ();
+  clearHLState ();
   return true;
 }
 
@@ -5144,10 +5117,9 @@ lowerIcode (iCode *ic)
       return POINTER_SET (ic) ? genPointerSet (ic) : genAssign (ic);
 
     case INLINEASM:
-      if (regalloc_dry_run)
-        clearRegisterState ();
-      else
-        genInlineAsm (ic);
+      if (!regalloc_dry_run)
+        genInline (ic);
+      clearHLState ();
       return true;
 
     case DUMMY_READ_VOLATILE:
@@ -5167,27 +5139,23 @@ lowerIcode (iCode *ic)
 }
 
 static void
-loweringFailed (void)
-{
-  if (regalloc_dry_run)
-    regalloc_dry_run_failed = true;
-  else
-    wassertl (0, "78K0 iCode lowering failed.");
-}
-
-static void
 gen78K0iCode (iCode *ic)
 {
   genLine.lineElement.ic = ic;
 
   if (!resultRemat (ic) && !ic->generated && !lowerIcode (ic))
-    loweringFailed ();
+    {
+      if (regalloc_dry_run)
+        regalloc_dry_run_failed = true;
+      else
+        wassertl (0, "78K0 iCode lowering failed.");
+    }
 }
 
 static void
 initializeDryCodegenState (const iCode *ic)
 {
-  resetFunctionState ();
+  memset (&G, 0, sizeof G);
 
   if (currFunc && currFunc->type)
     G.stack.local_size = currFunc->stack > 0 ? currFunc->stack : 0;

@@ -42,12 +42,6 @@ register_pair_completable (reg_t low, reg_t high)
   return valid_register_pair (low, high);
 }
 
-static bool
-operand_is_symbol (const operand *op, const int key)
-{
-  return op && IS_SYMOP (op) && OP_SYMBOL_CONST (op)->key == key;
-}
-
 template <class G_t>
 static bool
 operand_is_spilled (const operand *op, const assignment &a, unsigned short i, const G_t &G)
@@ -58,7 +52,7 @@ operand_is_spilled (const operand *op, const assignment &a, unsigned short i, co
   const symbol *sym = OP_SYMBOL_CONST (op);
   if (IS_TRUE_SYMOP (op))
     return sym->onStack;
-  if (!IS_ITEMP (op) || sym->remat || sym->regType == REG_CND)
+  if (sym->remat || sym->regType == REG_CND)
     return false;
 
   const auto range = G[i].operands.equal_range (sym->key);
@@ -105,16 +99,6 @@ operand_sane (const operand *op, unsigned forbidden, const assignment &a,
   return layout_sane && !(registers & forbidden);
 }
 
-template <class G_t, class I_t>
-static bool
-value_survives (var_t v, unsigned short i, const G_t &G, const I_t &I)
-{
-  const iCode *ic = G[i].ic;
-
-  return G[i].dying.find (v) == G[i].dying.end () &&
-    (POINTER_SET (ic) || !operand_is_symbol (IC_RESULT (ic), I[v].v));
-}
-
 struct register_masks
 {
   unsigned assigned;
@@ -126,6 +110,11 @@ static register_masks
 assignment_register_masks (const assignment &a, unsigned short i,
                            const G_t &G, const I_t &I)
 {
+  const iCode *ic = G[i].ic;
+  const operand *result = IC_RESULT (ic);
+  /* An ordinary result is a definition; a pointer-store result is an input. */
+  const symbol *defined_result = !POINTER_SET (ic) && result && IS_SYMOP (result) ?
+    OP_SYMBOL_CONST (result) : NULL;
   register_masks masks = {0, 0};
 
   for (var_t v : G[i].alive)
@@ -134,7 +123,8 @@ assignment_register_masks (const assignment &a, unsigned short i,
         const unsigned bit = 1u << a.global[v];
 
         masks.assigned |= bit;
-        if (value_survives (v, i, G, I))
+        if (G[i].dying.find (v) == G[i].dying.end () &&
+            (!defined_result || defined_result->key != I[v].v))
           masks.surviving |= bit;
       }
   return masks;
@@ -227,10 +217,7 @@ assign_operand_for_cost (operand *op, const assignment &a, unsigned short i,
   const int size = I[range.first->second].size;
   reg_t registers[2] = {spilled_register, spilled_register};
   for (auto entry = range.first; entry != range.second; ++entry)
-    {
-      const var_t v = entry->second;
-      registers[I[v].byte] = a.global[v];
-    }
+    registers[I[entry->second].byte] = a.global[entry->second];
   assign_symbol_registers (sym, size, registers);
 }
 

@@ -47,15 +47,13 @@ assigned_operand_layout (const operand *op, const assignment &a,
     return layout;
 
   const auto range = G[i].operands.equal_range (OP_SYMBOL_CONST (op)->key);
-  if (range.first == range.second)
-    return layout;
-
-  layout.size = I[range.first->second].size;
   for (auto entry = range.first; entry != range.second; ++entry)
     {
-      const reg_t reg = a.global[entry->second];
+      const var_t v = entry->second;
+      const reg_t reg = a.global[v];
 
-      layout.registers[I[entry->second].byte] = reg;
+      layout.size = I[v].size;
+      layout.registers[I[v].byte] = reg;
       if (reg >= 0)
         layout.mask |= 1u << reg;
     }
@@ -103,8 +101,14 @@ byte_pointer_preserved_in_de (const iCode *ic, unsigned clobbers)
     return NULL;
 
   if (ic->op != GET_VALUE_AT_ADDRESS)
-    return ic->op == SET_VALUE_AT_ADDRESS ? IC_LEFT (ic) :
-      POINTER_SET (ic) ? IC_RESULT (ic) : NULL;
+    {
+      const operand *value = IC_RIGHT (ic);
+
+      if (!value || getSize (operandType (value)) != 1)
+        return NULL;
+      return ic->op == SET_VALUE_AT_ADDRESS ? IC_LEFT (ic) :
+        POINTER_SET (ic) ? IC_RESULT (ic) : NULL;
+    }
 
   const operand *offset = IC_RIGHT (ic);
 
@@ -119,49 +123,37 @@ layout_is_pair (const operand_layout &layout, reg_t low)
     layout.registers[1] == low + 1;
 }
 
-struct register_masks
-{
-  unsigned assigned;
-  unsigned surviving;
-};
-
 template <class G_t, class I_t>
-static register_masks
-assignment_register_masks (const assignment &a, unsigned short i,
-                           const G_t &G, const I_t &I)
+static unsigned
+set_surviving_regs (const assignment &a, unsigned short i,
+                    const G_t &G, const I_t &I)
 {
-  const iCode *ic = G[i].ic;
+  iCode *ic = G[i].ic;
   const operand *result = IC_RESULT (ic);
   /* An ordinary result is a definition; a pointer-store result is an input. */
   const symbol *defined_result = !POINTER_SET (ic) && result && IS_SYMOP (result) ?
     OP_SYMBOL_CONST (result) : NULL;
-  register_masks masks = {0, 0};
+  unsigned survivors = 0;
 
-  for (var_t v : G[i].alive)
-    if (a.global[v] >= 0)
-      {
-        const unsigned bit = 1u << a.global[v];
-
-        masks.assigned |= bit;
-        if (G[i].dying.find (v) == G[i].dying.end () &&
-            (!defined_result || defined_result->key != I[v].v))
-          masks.surviving |= bit;
-      }
-  return masks;
-}
-
-static void
-set_register_masks (iCode *ic, const register_masks masks)
-{
   bitVectClear (ic->rMask);
   bitVectClear (ic->rSurv);
-  for (unsigned reg = K78K0_RB0_X_IDX; reg <= K78K0_RB0_H_IDX; reg++)
+
+  for (var_t v : G[i].alive)
     {
-      if (masks.assigned & (1u << reg))
-        ic->rMask = bitVectSetBit (ic->rMask, reg);
-      if (masks.surviving & (1u << reg))
-        ic->rSurv = bitVectSetBit (ic->rSurv, reg);
+      const reg_t reg = a.global[v];
+
+      if (reg < 0)
+        continue;
+
+      ic->rMask = bitVectSetBit (ic->rMask, reg);
+      if (G[i].dying.find (v) != G[i].dying.end () ||
+          (defined_result && defined_result->key == I[v].v))
+        continue;
+
+      ic->rSurv = bitVectSetBit (ic->rSurv, reg);
+      survivors |= 1u << reg;
     }
+  return survivors;
 }
 
 template <class G_t, class I_t>
@@ -199,12 +191,6 @@ inst_sane (const assignment &a, unsigned short i, const G_t &G, const I_t &I,
       if (layout_is_pair (pointer_layout, K78K0_RB0_E_IDX))
         clobbers &= ~K78K0_MASK_DE;
     }
-  /* genWordBinaryOp reads an exact BC addend in place. */
-  if (ic->op == '+' &&
-      clobbers == (K78K0_MASK_AX | K78K0_MASK_BC | K78K0_MASK_DE) &&
-      (layout_is_pair (left_layout, K78K0_RB0_C_IDX) ||
-       layout_is_pair (right_layout, K78K0_RB0_C_IDX)))
-    clobbers &= ~K78K0_MASK_BC;
   if (stack_uses_hl)
     clobbers |= K78K0_MASK_HL;
   const unsigned hl_clobbers = clobbers & K78K0_MASK_HL;
@@ -297,15 +283,14 @@ static float
 instruction_cost (const assignment &a, unsigned short i, const G_t &G, const I_t &I)
 {
   iCode *ic = G[i].ic;
-  const register_masks masks = assignment_register_masks (a, i, G, I);
+  const unsigned survivors = set_surviving_regs (a, i, G, I);
 
-  if (!inst_sane (a, i, G, I, masks.surviving))
+  if (!inst_sane (a, i, G, I, survivors))
     return std::numeric_limits<float>::infinity ();
   if (ic->generated || assignment_does_not_matter (ic))
     return 0.0f;
 
   assign_operands_for_cost (a, i, G, I);
-  set_register_masks (ic, masks);
 
   const float cost = k78k0DryInstructionCost (ic);
   ic->generated = false;
@@ -369,15 +354,16 @@ get_best_local_assignment_biased (assignment &a,
   a.local.swap (local);
 }
 
-/* Mark iCodes emitted by hidden-return or comparison fusion. */
+/* Mark iCodes emitted by return or comparison fusion. */
 static void
 extra_ic_generated (iCode *ic)
 {
   if (ic->op == CALL || ic->op == PCALL)
     {
-      if (iCode *bridge = k78k0HiddenReturnForwardBridge (
+      if (iCode *bridge = k78k0ReturnForwardBridge (
             ic, currFunc ? currFunc->type : NULL))
         {
+          OP_SYMBOL (IC_RESULT (ic))->for_newralloc = false;
           bridge->generated = true;
           if (bridge->op == ADDRESS_OF)
             bridge->next->generated = true;
@@ -439,7 +425,7 @@ allocate (T_t &T, G_t &G, const I_t &I)
     }
 
   for (unsigned i = 0; i < boost::num_vertices (G); i++)
-    set_register_masks (G[i].ic, assignment_register_masks (winner, i, G, I));
+    set_surviving_regs (winner, i, G, I);
 }
 
 extern "C" iCode *

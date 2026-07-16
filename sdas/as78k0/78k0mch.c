@@ -88,18 +88,12 @@ getrb (void)
   return -1;
 }
 
-static int
-regpair_code (int reg)
-{
-  return reg >= K78K0_AX && reg <= K78K0_HL ? reg - K78K0_AX : -1;
-}
-
 static void
 emit_pair_opcode (int reg, int opcode, int minimum_pair)
 {
-  const int pair = regpair_code (reg);
+  const int pair = reg - K78K0_AX;
 
-  if (pair < minimum_pair)
+  if (pair < minimum_pair || pair > K78K0_HL - K78K0_AX)
     qerr ();
   else
     outab (opcode + (pair << 1));
@@ -728,9 +722,6 @@ VOID
 machine (struct mne *mp)
 {
   struct expr e = { 0 };
-  char *p;
-  int c;
-  int src;
 
   switch (mp->m_type)
     {
@@ -966,26 +957,30 @@ machine (struct mne *mp)
       break;
 
     case S_78K0_BR:
-      p = ip;
-      if (getreg () == K78K0_AX)
-        emit_opcode (0x3198);
-      else
-        {
-          c = getnb ();
-          ip = p;
-          if (c == '!')
-            {
-              addr16expr (&e);
-              outab (0x9b);
-              emit_direct_address (&e, K78K0_DIR_ADDR16, 0);
-            }
-          else
-            {
-              expr (&e, 0);
-              outab (0xfa);
-              emit_relative_byte (&e);
-            }
-        }
+      {
+        char *start = ip;
+
+        if (getreg () == K78K0_AX)
+          emit_opcode (0x3198);
+        else
+          {
+            const int prefix = getnb ();
+
+            ip = start;
+            if (prefix == '!')
+              {
+                addr16expr (&e);
+                outab (0x9b);
+                emit_direct_address (&e, K78K0_DIR_ADDR16, 0);
+              }
+            else
+              {
+                expr (&e, 0);
+                outab (0xfa);
+                emit_relative_byte (&e);
+              }
+          }
+      }
       break;
 
     case S_78K0_CALL:
@@ -1014,11 +1009,14 @@ machine (struct mne *mp)
       break;
 
     case S_78K0_SEL:
-      src = getrb ();
-      if (src < 0)
-        qerr ();
-      outab (0x61);
-      outab (0xd0 | ((src & 0x02) << 4) | ((src & 0x01) << 3));
+      {
+        const int bank = getrb ();
+
+        if (bank < 0)
+          qerr ();
+        outab (0x61);
+        outab (0xd0 | ((bank & 0x02) << 4) | ((bank & 0x01) << 3));
+      }
       break;
 
     case S_78K0_XCH:

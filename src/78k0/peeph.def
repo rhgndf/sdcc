@@ -1,3 +1,14 @@
+// AND, OR and XOR already set Z from their result.
+
+replace restart {
+	%1	a,%2
+	cmp	a,#0x00
+	%3	%4
+} by {
+	%1	a,%2
+	%3	%4
+} if same(%1 'and' 'or' 'xor'), same(%3 'bz' 'bnz')
+
 // The indexed [HL+byte] form is one byte longer than the native [HL] form.
 
 replace restart {
@@ -13,67 +24,39 @@ replace restart {
 }
 
 // A load followed by a store to the same nonvolatile location leaves memory
-// unchanged. Likewise, A already holds the value immediately after a store.
+// unchanged.
 
 replace restart {
 	mov	a,[hl%1
 	mov	[hl%1,a
 } by {
 	mov	a,[hl%1
-} if notVolatile
-
-replace restart {
-	mov	[hl%1,a
-	mov	a,[hl%1
-} by {
-	mov	[hl%1,a
 } if notVolatile
 
 // Remove the second half of register round-trips. MOV and MOVW do not alter flags.
 
 replace {
-	mov	a,%1
-	mov	%1,a
+	mov	%1,%2
+	mov	%2,%1
 } by {
-	mov	a,%1
-} if same(%1 'x' 'b' 'c' 'd' 'e' 'l' 'h')
+	mov	%1,%2
+} if same(%1 'a' 'x' 'b' 'c' 'd' 'e' 'l' 'h'), same(%2 'a' 'x' 'b' 'c' 'd' 'e' 'l' 'h'), notSame(%1 %2)
 
 replace {
-	mov	%1,a
-	mov	a,%1
+	movw	%1,%2
+	movw	%2,%1
 } by {
-	mov	%1,a
-} if same(%1 'x' 'b' 'c' 'd' 'e' 'l' 'h')
-
-replace {
-	movw	ax,%1
-	movw	%1,ax
-} by {
-	movw	ax,%1
-} if same(%1 'bc' 'de' 'hl' 'sp')
-
-replace {
-	movw	%1,ax
-	movw	ax,%1
-} by {
-	movw	%1,ax
-} if same(%1 'bc' 'de' 'hl' 'sp')
+	movw	%1,%2
+} if same(%1 'ax' 'bc' 'de' 'hl' 'sp'), same(%2 'ax' 'bc' 'de' 'hl' 'sp'), notSame(%1 %2)
 
 // MOVW copies the high byte to both A and D in either direction.
 
 replace restart {
-	movw	de,ax
+	movw	%1,%2
 	mov	a,d
 } by {
-	movw	de,ax
-}
-
-replace restart {
-	movw	ax,de
-	mov	a,d
-} by {
-	movw	ax,de
-}
+	movw	%1,%2
+} if same(%1 'ax' 'de'), same(%2 'ax' 'de'), notSame(%1 %2)
 
 replace restart {
 	xch	a,%1
@@ -85,21 +68,12 @@ replace restart {
 
 replace restart {
 	mov	a,%1
-	inc	a
+	%2	a
 	mov	%1,a
 } by {
-	inc	%1
+	%2	%1
 	mov	a,%1
-} if same(%1 'x' 'b' 'c' 'd' 'e' 'l' 'h')
-
-replace restart {
-	mov	a,%1
-	dec	a
-	mov	%1,a
-} by {
-	dec	%1
-	mov	a,%1
-} if same(%1 'x' 'b' 'c' 'd' 'e' 'l' 'h')
+} if same(%1 'x' 'b' 'c' 'd' 'e' 'l' 'h'), same(%2 'inc' 'dec')
 
 // MOV and MOVW do not alter flags, so repeated safe loads have no observable
 // effect. Keep memory operands behind the volatility check.
@@ -138,6 +112,17 @@ replace restart {
 } by {
 	movw	%1,#%2
 } if same(%1 'ax' 'bc' 'de' 'hl' 'sp')
+
+// PUSH preserves AX, so the same literal need not be reconstructed afterward.
+
+replace restart {
+	movw	ax,#%1
+	push	ax
+	movw	ax,#%1
+} by {
+	movw	ax,#%1
+	push	ax
+}
 
 // Discard a side-effect-free AX load when the next instruction replaces AX.
 // Do not match memory sources, since they may be volatile.

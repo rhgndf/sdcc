@@ -112,12 +112,13 @@ k78k0SpillThis (symbol *sym)
 {
   if (!sym->remat && !sym->usl.spillLoc)
     sym->usl.spillLoc = createSpillSlot (sym);
+  if (!sym->remat && !sym->usl.spillLoc->allocreq)
+    sym->usl.spillLoc->allocreq++;
 
   sym->isspilt = sym->spillA = 1;
   sym->stackSpil = !sym->remat;
 
-  for (int i = 0; i < sym->nRegs && i < K78K0_MAX_SCALAR_BYTES; i++)
-    sym->regs[i] = NULL;
+  memset (sym->regs, 0, sizeof sym->regs);
 }
 
 static void
@@ -139,13 +140,13 @@ disableUnsupportedOperands (iCode *ic)
 }
 
 static bool
-isDirectlyForwardedHiddenResult (const symbol *sym)
+isDirectlyForwardedResult (const symbol *sym)
 {
   if (!sym || !currFunc || bitVectnBitsOn (sym->defs) != 1)
     return false;
 
   iCode *call = hTabItemWithKey (iCodehTab, bitVectFirstBit (sym->defs));
-  return call && k78k0HiddenReturnForwardBridge (call, currFunc->type);
+  return call && k78k0ReturnForwardBridge (call, currFunc->type);
 }
 
 void
@@ -181,28 +182,40 @@ k78k0_assignRegisters (ebbIndex *ebbi)
       /* Wide lowerings use the fixed AX/BC result registers as scratch, so
          keep values wider than a word in stack storage. */
       sym->for_newralloc = size <= 2 && sym->liveTo > sym->liveFrom &&
-                           bitVectnBitsOn (sym->defs);
+                           !bitVectIsZero (sym->defs);
     }
 
   /* Keep operands that no lowering can consume in registers out of the
-     conflict graph without doing a symbol-by-symbol walk over use bitvectors. */
+     conflict graph, and retain true local variables in the compacted frame. */
   for (int i = 0; i < ebbi->count; i++)
     for (iCode *ic = ebbi->bbOrder[i]->sch; ic; ic = ic->next)
-      disableUnsupportedOperands (ic);
+      {
+        if (IC_RESULT (ic) && ic->op != IFX && IS_TRUE_SYMOP (IC_RESULT (ic)))
+          OP_SYMBOL (IC_RESULT (ic))->allocreq++;
+        disableUnsupportedOperands (ic);
+      }
 
   iCode *ic_head = k78k0_ralloc2_cc (ebbi);
 
-  /* Hidden destinations need storage even when the call result itself is unused. */
+  /* Graph-absent values need storage unless a call forwards them to RETURN. */
   for (symbol *sym = hTabFirstItem (liveRanges, &key); sym; sym = hTabNextItem (liveRanges, &key))
     {
       const int size = getSize (sym->type);
 
       if (sym->isitmp && sym->regType != REG_CND && size > 0 && !sym->remat &&
-          !sym->regs[0] && !sym->usl.spillLoc &&
+          !sym->regs[0] &&
           (sym->liveTo > sym->liveFrom || size > 4 || IS_STRUCT (sym->type)) &&
-          !isDirectlyForwardedHiddenResult (sym))
-        k78k0SpillThis (sym);
+          !isDirectlyForwardedResult (sym))
+        {
+          if (!sym->usl.spillLoc)
+            k78k0SpillThis (sym);
+          else if (!sym->usl.spillLoc->allocreq)
+            sym->usl.spillLoc->allocreq++;
+        }
     }
+
+  if (currFunc)
+    redoStackOffsets ();
 
   if (options.dump_i_code)
     dumpEbbsToFileExt (DUMP_RASSGN, ebbi);

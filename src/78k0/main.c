@@ -252,6 +252,7 @@ struct k78k0_instruction_view
 enum k78k0_operand_class
 {
   K78K0_OPERAND_NONE,
+  K78K0_OPERAND_A,
   K78K0_OPERAND_BYTE_REGISTER,
   K78K0_OPERAND_REGISTER_PAIR,
   K78K0_OPERAND_SP,
@@ -294,26 +295,36 @@ static bool
 k78k0_splitOperands (const char *text, struct k78k0_instruction_view *view)
 {
   const char *end = strchr (text, ';');
-  const char *comma;
+  struct k78k0_span left;
+  struct k78k0_span right;
 
   if (!end)
     end = text + strlen (text);
   view->operand_count = 0;
-  comma = memchr (text, ',', (size_t)(end - text));
-  if (comma)
+
+  const char *comma = memchr (text, ',', (size_t)(end - text));
+  if (!comma)
     {
-      if (memchr (comma + 1, ',', (size_t)(end - comma - 1)))
-        return false;
-      view->operand[view->operand_count++] = k78k0_trimSpan (
-        (struct k78k0_span){text, (size_t)(comma - text)});
-      text = comma + 1;
+      left = k78k0_trimSpan (
+        (struct k78k0_span){text, (size_t)(end - text)});
+      if (left.length)
+        view->operand[view->operand_count++] = left;
+      return true;
     }
-  struct k78k0_span operand = k78k0_trimSpan (
-    (struct k78k0_span){text, (size_t)(end - text)});
-  if (operand.length)
-    view->operand[view->operand_count++] = operand;
-  return (!comma || view->operand_count == 2) &&
-    (!view->operand_count || view->operand[0].length);
+
+  if (memchr (comma + 1, ',', (size_t)(end - comma - 1)))
+    return false;
+  left = k78k0_trimSpan (
+    (struct k78k0_span){text, (size_t)(comma - text)});
+  right = k78k0_trimSpan (
+    (struct k78k0_span){comma + 1, (size_t)(end - comma - 1)});
+  if (!left.length || !right.length)
+    return false;
+
+  view->operand[0] = left;
+  view->operand[1] = right;
+  view->operand_count = 2;
+  return true;
 }
 
 static bool
@@ -361,7 +372,7 @@ k78k0_classifyOperand (struct k78k0_span operand, const bool compiler_generated)
     enum k78k0_operand_class class;
   }
   exact[] = {
-    {"x", K78K0_OPERAND_BYTE_REGISTER}, {"a", K78K0_OPERAND_BYTE_REGISTER},
+    {"x", K78K0_OPERAND_BYTE_REGISTER}, {"a", K78K0_OPERAND_A},
     {"c", K78K0_OPERAND_BYTE_REGISTER}, {"b", K78K0_OPERAND_BYTE_REGISTER},
     {"e", K78K0_OPERAND_BYTE_REGISTER}, {"d", K78K0_OPERAND_BYTE_REGISTER},
     {"l", K78K0_OPERAND_BYTE_REGISTER}, {"h", K78K0_OPERAND_BYTE_REGISTER},
@@ -426,12 +437,6 @@ k78k0_classifyOperand (struct k78k0_span operand, const bool compiler_generated)
   if (k78k0_absoluteValue (operand, &address))
     return k78k0_classifyDirectValue (address, false);
   return compiler_generated ? K78K0_OPERAND_SADDR : K78K0_OPERAND_NONE;
-}
-
-static bool
-k78k0_isAccumulator (const struct k78k0_span operand)
-{
-  return k78k0_spanEqual (operand, "a");
 }
 
 static int
@@ -500,7 +505,7 @@ k78k0_sizeInstruction (const struct k78k0_instruction_view *view)
       left_class == K78K0_OPERAND_SADDR ? 3 : 999;
   if (k78k0_spanEqual (view->mnemonic, "inc") || k78k0_spanEqual (view->mnemonic, "dec"))
     return view->operand_count != 1 ? 999 :
-      left_class == K78K0_OPERAND_BYTE_REGISTER ? 1 :
+      left_class == K78K0_OPERAND_A || left_class == K78K0_OPERAND_BYTE_REGISTER ? 1 :
       left_class == K78K0_OPERAND_SADDR ? 2 : 999;
 
   if (k78k0_spanEqual (view->mnemonic, "set1") || k78k0_spanEqual (view->mnemonic, "clr1"))
@@ -530,7 +535,7 @@ k78k0_sizeInstruction (const struct k78k0_instruction_view *view)
 
   if (k78k0_spanEqual (view->mnemonic, "mov"))
     {
-      if (k78k0_isAccumulator (left))
+      if (left_class == K78K0_OPERAND_A)
         {
           if (right_class == K78K0_OPERAND_IMMEDIATE) return 2;
           if (right_class >= K78K0_OPERAND_DE && right_class <= K78K0_OPERAND_HL_BC)
@@ -540,15 +545,18 @@ k78k0_sizeInstruction (const struct k78k0_instruction_view *view)
           return k78k0_directSize (right_class);
         }
       if (left_class == K78K0_OPERAND_PSW)
-        return right_class == K78K0_OPERAND_IMMEDIATE ? 3 : k78k0_isAccumulator (right) ? 2 : 999;
+        return right_class == K78K0_OPERAND_IMMEDIATE ? 3 :
+          right_class == K78K0_OPERAND_A ? 2 : 999;
       if (left_class == K78K0_OPERAND_BYTE_REGISTER)
-        return right_class == K78K0_OPERAND_IMMEDIATE ? 2 : k78k0_isAccumulator (right) ? 1 : 999;
+        return right_class == K78K0_OPERAND_IMMEDIATE ? 2 :
+          right_class == K78K0_OPERAND_A ? 1 : 999;
       if (left_class >= K78K0_OPERAND_DE && left_class <= K78K0_OPERAND_HL_BC)
-        return k78k0_isAccumulator (right) ? k78k0_memorySize (left_class, false) : 999;
+        return right_class == K78K0_OPERAND_A ?
+          k78k0_memorySize (left_class, false) : 999;
       if (left_class == K78K0_OPERAND_SADDR || left_class == K78K0_OPERAND_SFR ||
           left_class == K78K0_OPERAND_ADDR16)
         return right_class == K78K0_OPERAND_IMMEDIATE ? 3 :
-          k78k0_isAccumulator (right) ? k78k0_directSize (left_class) : 999;
+          right_class == K78K0_OPERAND_A ? k78k0_directSize (left_class) : 999;
       return 999;
     }
 
@@ -573,7 +581,7 @@ k78k0_sizeInstruction (const struct k78k0_instruction_view *view)
       k78k0_spanEqual (view->mnemonic, "and") || k78k0_spanEqual (view->mnemonic, "or") ||
       k78k0_spanEqual (view->mnemonic, "xor") || k78k0_spanEqual (view->mnemonic, "cmp"))
     {
-      if (k78k0_isAccumulator (left))
+      if (left_class == K78K0_OPERAND_A)
         {
           if (right_class == K78K0_OPERAND_IMMEDIATE || right_class == K78K0_OPERAND_BYTE_REGISTER)
             return 2;
@@ -581,11 +589,13 @@ k78k0_sizeInstruction (const struct k78k0_instruction_view *view)
             return k78k0_memorySize (right_class, true);
           return k78k0_directSize (right_class);
         }
-      return left_class == K78K0_OPERAND_BYTE_REGISTER && k78k0_isAccumulator (right) ? 2 :
+      return left_class == K78K0_OPERAND_BYTE_REGISTER &&
+        right_class == K78K0_OPERAND_A ? 2 :
         left_class == K78K0_OPERAND_SADDR && right_class == K78K0_OPERAND_IMMEDIATE ? 3 : 999;
     }
 
-  if (k78k0_spanEqual (view->mnemonic, "xch") && k78k0_isAccumulator (left))
+  if (k78k0_spanEqual (view->mnemonic, "xch") &&
+      left_class == K78K0_OPERAND_A)
     {
       if (right_class >= K78K0_OPERAND_DE && right_class <= K78K0_OPERAND_HL_BC)
         return k78k0_memorySize (right_class, true);

@@ -133,6 +133,15 @@ markGenerated (iCode *ic)
 }
 
 static void
+swapOperands (operand **left, operand **right)
+{
+  operand *temporary = *left;
+
+  *left = *right;
+  *right = temporary;
+}
+
+static void
 emit2 (const char *inst, const char *fmt, ...)
 {
   va_list ap;
@@ -3729,11 +3738,7 @@ genMult (const iCode *ic)
     }
 
   if (IS_OP_LITERAL (left))
-    {
-      operand *temporary = left;
-      left = right;
-      right = temporary;
-    }
+    swapOperands (&left, &right);
 
   size = k78k0_operandSize (result);
   if (size < 1 || size > 2)
@@ -3966,12 +3971,7 @@ genCmpEqNe (const iCode *ic, iCode *ifx)
     size = 1;
 
   if (IS_OP_LITERAL (left) && !IS_OP_LITERAL (right))
-    {
-      operand *temporary = left;
-
-      left = right;
-      right = temporary;
-    }
+    swapOperands (&left, &right);
 
   if (!ifx && size == 1 && IS_OP_LITERAL (right))
     {
@@ -4705,12 +4705,7 @@ matchIndexedPointerAccess (const iCode *add, operand **base_out,
   base = IC_LEFT (add);
   index = IC_RIGHT (add);
   if (!isIndexedBase (base) || !isByteIndex (index))
-    {
-      operand *temporary = base;
-
-      base = index;
-      index = temporary;
-    }
+    swapOperands (&base, &index);
   if (!isIndexedBase (base) || !isByteIndex (index))
     return NULL;
 
@@ -4762,12 +4757,7 @@ matchScaledIndexedAccess (const iCode *multiply, scaled_index_match *match)
   source = IC_LEFT (multiply);
   literal = IC_RIGHT (multiply);
   if (IS_OP_LITERAL (source))
-    {
-      operand *temporary = source;
-
-      source = literal;
-      literal = temporary;
-    }
+    swapOperands (&source, &literal);
 
   if (!IS_OP_LITERAL (literal))
     return NULL;
@@ -4905,12 +4895,7 @@ byteOffsetIndex (const iCode *scale)
   if (scale->op == '*')
     {
       if (IS_OP_LITERAL (index))
-        {
-          operand *temporary = index;
-
-          index = literal;
-          literal = temporary;
-        }
+        swapOperands (&index, &literal);
       if (!IS_OP_LITERAL (literal) || operandLitValueUll (literal) != 8)
         return NULL;
     }

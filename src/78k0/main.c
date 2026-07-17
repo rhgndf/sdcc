@@ -442,16 +442,47 @@ k78k0_classifyOperand (struct k78k0_span operand, const bool compiler_generated)
 static int
 k78k0_memorySize (const enum k78k0_operand_class operand, const bool prefix)
 {
-  return operand == K78K0_OPERAND_DE || operand == K78K0_OPERAND_HL ? 1 :
-    operand == K78K0_OPERAND_HL_DISP ? 2 : operand == K78K0_OPERAND_HL_BC ?
-    prefix + 1 : 999;
+  switch (operand)
+    {
+    case K78K0_OPERAND_DE:
+    case K78K0_OPERAND_HL:
+      return 1;
+    case K78K0_OPERAND_HL_DISP:
+      return 2;
+    case K78K0_OPERAND_HL_BC:
+      return prefix + 1;
+    default:
+      return 999;
+    }
 }
 
 static int
 k78k0_directSize (const enum k78k0_operand_class operand)
 {
-  return operand == K78K0_OPERAND_ADDR16 ? 3 :
-    operand == K78K0_OPERAND_SADDR || operand == K78K0_OPERAND_SFR ? 2 : 999;
+  switch (operand)
+    {
+    case K78K0_OPERAND_ADDR16:
+      return 3;
+    case K78K0_OPERAND_SADDR:
+    case K78K0_OPERAND_SFR:
+      return 2;
+    default:
+      return 999;
+    }
+}
+
+static bool
+k78k0_isMemoryOperand (const enum k78k0_operand_class operand)
+{
+  return operand == K78K0_OPERAND_DE || operand == K78K0_OPERAND_HL ||
+    operand == K78K0_OPERAND_HL_DISP || operand == K78K0_OPERAND_HL_BC;
+}
+
+static bool
+k78k0_isDirectOperand (const enum k78k0_operand_class operand)
+{
+  return operand == K78K0_OPERAND_SADDR || operand == K78K0_OPERAND_SFR ||
+    operand == K78K0_OPERAND_ADDR16;
 }
 
 static int
@@ -478,8 +509,148 @@ k78k0_fixedInstructionSize (const struct k78k0_span mnemonic,
 
   for (size_t i = 0; i < sizeof instructions / sizeof *instructions; i++)
     if (k78k0_spanEqual (mnemonic, instructions[i].mnemonic))
-      return operand_count == instructions[i].operands ? instructions[i].size : 999;
+      return operand_count == instructions[i].operands ? instructions[i].size :
+        999;
   return 0;
+}
+
+static int
+k78k0_sizeBitInstruction (const struct k78k0_instruction_view *view,
+                          const enum k78k0_operand_class left,
+                          const enum k78k0_operand_class right)
+{
+  if (k78k0_spanEqual (view->mnemonic, "set1") ||
+      k78k0_spanEqual (view->mnemonic, "clr1"))
+    return view->operand_count != 1 ? 999 :
+      left == K78K0_OPERAND_BIT_CY ? 1 :
+      left == K78K0_OPERAND_BIT_SFR ? 3 :
+      left >= K78K0_OPERAND_BIT_A ? 2 : 999;
+
+  if (k78k0_spanEqual (view->mnemonic, "mov1") ||
+      k78k0_spanEqual (view->mnemonic, "and1") ||
+      k78k0_spanEqual (view->mnemonic, "or1") ||
+      k78k0_spanEqual (view->mnemonic, "xor1"))
+    {
+      if (view->operand_count != 2)
+        return 999;
+
+      const enum k78k0_operand_class bit =
+        left == K78K0_OPERAND_BIT_CY ? right : left;
+      return bit == K78K0_OPERAND_BIT_A || bit == K78K0_OPERAND_BIT_HL ? 2 :
+        bit >= K78K0_OPERAND_BIT_PSW ? 3 :
+        999;
+    }
+
+  if (k78k0_spanEqual (view->mnemonic, "bt") ||
+      k78k0_spanEqual (view->mnemonic, "bf") ||
+      k78k0_spanEqual (view->mnemonic, "btclr"))
+    {
+      if (view->operand_count != 2)
+        return 999;
+      if (left == K78K0_OPERAND_BIT_A || left == K78K0_OPERAND_BIT_HL)
+        return 3;
+      return k78k0_spanEqual (view->mnemonic, "bt") &&
+        (left == K78K0_OPERAND_BIT_SADDR || left == K78K0_OPERAND_BIT_PSW) ? 3 :
+        left >= K78K0_OPERAND_BIT_PSW ? 4 :
+        999;
+    }
+
+  return 0;
+}
+
+static int
+k78k0_sizeMove (const struct k78k0_instruction_view *view,
+                 const enum k78k0_operand_class destination,
+                 const enum k78k0_operand_class source)
+{
+  if (view->operand_count != 2)
+    return 999;
+
+  if (destination == K78K0_OPERAND_A)
+    {
+      if (source == K78K0_OPERAND_IMMEDIATE)
+        return 2;
+      if (k78k0_isMemoryOperand (source))
+        return k78k0_memorySize (source, false);
+      if (source == K78K0_OPERAND_BYTE_REGISTER)
+        return 1;
+      if (source == K78K0_OPERAND_PSW)
+        return 2;
+      return k78k0_directSize (source);
+    }
+  if (destination == K78K0_OPERAND_PSW)
+    return source == K78K0_OPERAND_IMMEDIATE ? 3 :
+      source == K78K0_OPERAND_A ? 2 : 999;
+  if (destination == K78K0_OPERAND_BYTE_REGISTER)
+    return source == K78K0_OPERAND_IMMEDIATE ? 2 :
+      source == K78K0_OPERAND_A ? 1 : 999;
+  if (k78k0_isMemoryOperand (destination))
+    return source == K78K0_OPERAND_A ? k78k0_memorySize (destination, false) :
+      999;
+  if (k78k0_isDirectOperand (destination))
+    return source == K78K0_OPERAND_IMMEDIATE ? 3 :
+      source == K78K0_OPERAND_A ? k78k0_directSize (destination) :
+      999;
+  return 999;
+}
+
+static int
+k78k0_sizeMoveWord (const struct k78k0_instruction_view *view,
+                     const enum k78k0_operand_class destination,
+                     const enum k78k0_operand_class source)
+{
+  if (view->operand_count != 2)
+    return 999;
+
+  if (destination == K78K0_OPERAND_REGISTER_PAIR)
+    return source == K78K0_OPERAND_IMMEDIATE ? 3 :
+      source == K78K0_OPERAND_SP ? 2 :
+      source == K78K0_OPERAND_REGISTER_PAIR ? 1 : k78k0_directSize (source);
+  if (destination == K78K0_OPERAND_SP)
+    return source == K78K0_OPERAND_IMMEDIATE ? 4 :
+      source == K78K0_OPERAND_REGISTER_PAIR ? 2 :
+      999;
+  if (k78k0_isDirectOperand (destination))
+    return source == K78K0_OPERAND_IMMEDIATE ? 4 :
+      source == K78K0_OPERAND_REGISTER_PAIR ? k78k0_directSize (destination) :
+      999;
+  return 999;
+}
+
+static bool
+k78k0_isByteAluMnemonic (const struct k78k0_span mnemonic)
+{
+  static const char *const names[] =
+    {"add", "addc", "sub", "subc", "and", "or", "xor", "cmp"};
+
+  for (size_t i = 0; i < sizeof names / sizeof *names; i++)
+    if (k78k0_spanEqual (mnemonic, names[i]))
+      return true;
+  return false;
+}
+
+static int
+k78k0_sizeByteAlu (const struct k78k0_instruction_view *view,
+                    const enum k78k0_operand_class destination,
+                    const enum k78k0_operand_class source)
+{
+  if (view->operand_count != 2)
+    return 999;
+
+  if (destination == K78K0_OPERAND_A)
+    {
+      if (source == K78K0_OPERAND_IMMEDIATE ||
+          source == K78K0_OPERAND_BYTE_REGISTER)
+        return 2;
+      if (k78k0_isMemoryOperand (source))
+        return k78k0_memorySize (source, true);
+      return k78k0_directSize (source);
+    }
+  return destination == K78K0_OPERAND_BYTE_REGISTER &&
+    source == K78K0_OPERAND_A ? 2 :
+    destination == K78K0_OPERAND_SADDR &&
+    source == K78K0_OPERAND_IMMEDIATE ? 3 :
+    999;
 }
 
 static int
@@ -496,9 +667,11 @@ k78k0_sizeInstruction (const struct k78k0_instruction_view *view)
   const enum k78k0_operand_class right_class = k78k0_classifyOperand (right, view->compiler_generated);
 
   if (k78k0_spanEqual (view->mnemonic, "br"))
-    return view->operand_count != 1 ? 999 : k78k0_spanEqual (left, "ax") ? 2 :
+    return view->operand_count != 1 ? 999 :
+      k78k0_spanEqual (left, "ax") ? 2 :
       left_class == K78K0_OPERAND_ADDR16 ? 3 :
-      (view->compiler_generated || (left.length && left.text[left.length - 1] == '$')) ? 2 : 999;
+      (view->compiler_generated || (left.length && left.text[left.length - 1] == '$')) ? 2 :
+      999;
   if (k78k0_spanEqual (view->mnemonic, "dbnz"))
     return view->operand_count != 2 ? 999 :
       k78k0_spanEqual (left, "b") || k78k0_spanEqual (left, "c") ? 2 :
@@ -508,96 +681,25 @@ k78k0_sizeInstruction (const struct k78k0_instruction_view *view)
       left_class == K78K0_OPERAND_A || left_class == K78K0_OPERAND_BYTE_REGISTER ? 1 :
       left_class == K78K0_OPERAND_SADDR ? 2 : 999;
 
-  if (k78k0_spanEqual (view->mnemonic, "set1") || k78k0_spanEqual (view->mnemonic, "clr1"))
-    return view->operand_count != 1 ? 999 : left_class == K78K0_OPERAND_BIT_CY ? 1 :
-      left_class == K78K0_OPERAND_BIT_SFR ? 3 :
-      left_class >= K78K0_OPERAND_BIT_A ? 2 : 999;
-  if (k78k0_spanEqual (view->mnemonic, "mov1") || k78k0_spanEqual (view->mnemonic, "and1") ||
-      k78k0_spanEqual (view->mnemonic, "or1") || k78k0_spanEqual (view->mnemonic, "xor1"))
-    {
-      if (view->operand_count != 2)
-        return 999;
-      const enum k78k0_operand_class bit = left_class == K78K0_OPERAND_BIT_CY ? right_class : left_class;
-      return bit == K78K0_OPERAND_BIT_A || bit == K78K0_OPERAND_BIT_HL ? 2 :
-        bit >= K78K0_OPERAND_BIT_PSW ? 3 : 999;
-    }
-  if (k78k0_spanEqual (view->mnemonic, "bt") || k78k0_spanEqual (view->mnemonic, "bf") ||
-      k78k0_spanEqual (view->mnemonic, "btclr"))
-    {
-      if (view->operand_count != 2)
-        return 999;
-      if (left_class == K78K0_OPERAND_BIT_A || left_class == K78K0_OPERAND_BIT_HL)
-        return 3;
-      return k78k0_spanEqual (view->mnemonic, "bt") &&
-        (left_class == K78K0_OPERAND_BIT_SADDR || left_class == K78K0_OPERAND_BIT_PSW) ? 3 :
-        left_class >= K78K0_OPERAND_BIT_PSW ? 4 : 999;
-    }
+  const int bit_size = k78k0_sizeBitInstruction (view, left_class, right_class);
+  if (bit_size)
+    return bit_size;
 
   if (k78k0_spanEqual (view->mnemonic, "mov"))
-    {
-      if (left_class == K78K0_OPERAND_A)
-        {
-          if (right_class == K78K0_OPERAND_IMMEDIATE) return 2;
-          if (right_class >= K78K0_OPERAND_DE && right_class <= K78K0_OPERAND_HL_BC)
-            return k78k0_memorySize (right_class, false);
-          if (right_class == K78K0_OPERAND_BYTE_REGISTER) return 1;
-          if (right_class == K78K0_OPERAND_PSW) return 2;
-          return k78k0_directSize (right_class);
-        }
-      if (left_class == K78K0_OPERAND_PSW)
-        return right_class == K78K0_OPERAND_IMMEDIATE ? 3 :
-          right_class == K78K0_OPERAND_A ? 2 : 999;
-      if (left_class == K78K0_OPERAND_BYTE_REGISTER)
-        return right_class == K78K0_OPERAND_IMMEDIATE ? 2 :
-          right_class == K78K0_OPERAND_A ? 1 : 999;
-      if (left_class >= K78K0_OPERAND_DE && left_class <= K78K0_OPERAND_HL_BC)
-        return right_class == K78K0_OPERAND_A ?
-          k78k0_memorySize (left_class, false) : 999;
-      if (left_class == K78K0_OPERAND_SADDR || left_class == K78K0_OPERAND_SFR ||
-          left_class == K78K0_OPERAND_ADDR16)
-        return right_class == K78K0_OPERAND_IMMEDIATE ? 3 :
-          right_class == K78K0_OPERAND_A ? k78k0_directSize (left_class) : 999;
-      return 999;
-    }
+    return k78k0_sizeMove (view, left_class, right_class);
 
   if (k78k0_spanEqual (view->mnemonic, "movw"))
-    {
-      if (left_class == K78K0_OPERAND_REGISTER_PAIR)
-        return right_class == K78K0_OPERAND_IMMEDIATE ? 3 :
-          right_class == K78K0_OPERAND_SP ? 2 :
-          right_class == K78K0_OPERAND_REGISTER_PAIR ? 1 : k78k0_directSize (right_class);
-      if (left_class == K78K0_OPERAND_SP)
-        return right_class == K78K0_OPERAND_IMMEDIATE ? 4 :
-          right_class == K78K0_OPERAND_REGISTER_PAIR ? 2 : 999;
-      if (left_class == K78K0_OPERAND_SADDR || left_class == K78K0_OPERAND_SFR ||
-          left_class == K78K0_OPERAND_ADDR16)
-        return right_class == K78K0_OPERAND_IMMEDIATE ? 4 :
-          right_class == K78K0_OPERAND_REGISTER_PAIR ? k78k0_directSize (left_class) : 999;
-      return 999;
-    }
+    return k78k0_sizeMoveWord (view, left_class, right_class);
 
-  if (k78k0_spanEqual (view->mnemonic, "add") || k78k0_spanEqual (view->mnemonic, "addc") ||
-      k78k0_spanEqual (view->mnemonic, "sub") || k78k0_spanEqual (view->mnemonic, "subc") ||
-      k78k0_spanEqual (view->mnemonic, "and") || k78k0_spanEqual (view->mnemonic, "or") ||
-      k78k0_spanEqual (view->mnemonic, "xor") || k78k0_spanEqual (view->mnemonic, "cmp"))
-    {
-      if (left_class == K78K0_OPERAND_A)
-        {
-          if (right_class == K78K0_OPERAND_IMMEDIATE || right_class == K78K0_OPERAND_BYTE_REGISTER)
-            return 2;
-          if (right_class >= K78K0_OPERAND_DE && right_class <= K78K0_OPERAND_HL_BC)
-            return k78k0_memorySize (right_class, true);
-          return k78k0_directSize (right_class);
-        }
-      return left_class == K78K0_OPERAND_BYTE_REGISTER &&
-        right_class == K78K0_OPERAND_A ? 2 :
-        left_class == K78K0_OPERAND_SADDR && right_class == K78K0_OPERAND_IMMEDIATE ? 3 : 999;
-    }
+  if (k78k0_isByteAluMnemonic (view->mnemonic))
+    return k78k0_sizeByteAlu (view, left_class, right_class);
 
   if (k78k0_spanEqual (view->mnemonic, "xch") &&
       left_class == K78K0_OPERAND_A)
     {
-      if (right_class >= K78K0_OPERAND_DE && right_class <= K78K0_OPERAND_HL_BC)
+      if (view->operand_count != 2)
+        return 999;
+      if (k78k0_isMemoryOperand (right_class))
         return k78k0_memorySize (right_class, true);
       return right_class == K78K0_OPERAND_BYTE_REGISTER ? 1 : k78k0_directSize (right_class);
     }
@@ -612,7 +714,8 @@ k78k0_instructionSize (const char *mnemonic, const char *operands)
     {mnemonic, strlen (mnemonic)}, {{NULL, 0}, {NULL, 0}}, 0, true
   };
 
-  return k78k0_splitOperands (operands, &view) ? k78k0_sizeInstruction (&view) : 999;
+  return k78k0_splitOperands (operands, &view) ? k78k0_sizeInstruction (&view) :
+    999;
 }
 
 static int
@@ -640,9 +743,11 @@ k78k0_instructionSizeLine (lineNode *line)
       while (isspace ((unsigned char)*cursor))
         cursor++;
       return colon == view.mnemonic.text + view.mnemonic.length - 1 &&
-        (!*cursor || *cursor == ';') ? 0 : 999;
+        (!*cursor || *cursor == ';') ? 0 :
+        999;
     }
-  return k78k0_splitOperands (cursor, &view) ? k78k0_sizeInstruction (&view) : 999;
+  return k78k0_splitOperands (cursor, &view) ? k78k0_sizeInstruction (&view) :
+    999;
 }
 
 static bool

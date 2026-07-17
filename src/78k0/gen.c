@@ -3853,48 +3853,59 @@ compareOperandBytes (const operand *left, const operand *right, const int offset
   return aluOperandByteToA ("cmp", right, offset);
 }
 
+typedef struct
+{
+  char true_label[32];
+  char false_label[32];
+  char done_label[32];
+}
+comparison_labels;
+
 static void
-prepareComparisonLabels (iCode *ifx, char *true_label, char *false_label, char *done_label, size_t label_size)
+prepareComparisonLabels (iCode *ifx, comparison_labels *labels)
 {
   if (!ifx)
     {
-      makeLocalLabel (true_label, label_size);
-      makeLocalLabel (false_label, label_size);
-      makeLocalLabel (done_label, label_size);
+      makeLocalLabel (labels->true_label, sizeof (labels->true_label));
+      makeLocalLabel (labels->false_label, sizeof (labels->false_label));
+      makeLocalLabel (labels->done_label, sizeof (labels->done_label));
     }
   else if (IC_TRUE (ifx))
     {
-      makeICLabel (true_label, label_size, IC_TRUE (ifx));
-      makeLocalLabel (false_label, label_size);
+      makeICLabel (labels->true_label, sizeof (labels->true_label),
+                   IC_TRUE (ifx));
+      makeLocalLabel (labels->false_label, sizeof (labels->false_label));
     }
   else
     {
       wassertl (IC_FALSE (ifx), "78K0 comparison IFX has no target.");
-      makeLocalLabel (true_label, label_size);
-      makeICLabel (false_label, label_size, IC_FALSE (ifx));
+      makeLocalLabel (labels->true_label, sizeof (labels->true_label));
+      makeICLabel (labels->false_label, sizeof (labels->false_label),
+                   IC_FALSE (ifx));
     }
 }
 
 static void
-finishComparison (const operand *result, iCode *ifx, const char *true_label, const char *false_label,
-                  const char *done_label, const bool preserve_hl)
+finishComparison (const operand *result, iCode *ifx,
+                  const comparison_labels *labels, const bool preserve_hl)
 {
   if (!ifx)
     {
-      emitLocalLabel (false_label);
+      emitLocalLabel (labels->false_label);
       emit2 ("mov", "a,#0x00");
-      emit2 ("br", "%s", done_label);
-      emitLocalLabel (true_label);
+      emit2 ("br", "%s", labels->done_label);
+      emitLocalLabel (labels->true_label);
       emit2 ("mov", "a,#0x01");
-      emitLocalLabel (done_label);
+      emitLocalLabel (labels->done_label);
       setBooleanResult (result);
       return;
     }
 
   if (preserve_hl)
-    emitLocalLabelPreservingHL (IC_TRUE (ifx) ? false_label : true_label);
+    emitLocalLabelPreservingHL (
+      IC_TRUE (ifx) ? labels->false_label : labels->true_label);
   else
-    emitLocalLabel (IC_TRUE (ifx) ? false_label : true_label);
+    emitLocalLabel (IC_TRUE (ifx) ? labels->false_label : labels->true_label);
   markGenerated (ifx);
 }
 
@@ -3940,9 +3951,7 @@ genCmpEqNe (const iCode *ic, iCode *ifx)
   operand *left = IC_LEFT (ic);
   operand *right = IC_RIGHT (ic);
   const bool is_ne = ic->op == NE_OP;
-  char true_label[32];
-  char false_label[32];
-  char done_label[32];
+  comparison_labels labels;
   int size;
 
   if (!IS_ITEMP (result) || !left || !right)
@@ -3979,7 +3988,7 @@ genCmpEqNe (const iCode *ic, iCode *ifx)
       return true;
     }
 
-  prepareComparisonLabels (ifx, true_label, false_label, done_label, sizeof (true_label));
+  prepareComparisonLabels (ifx, &labels);
 
   if (size > 2 && IS_OP_LITERAL (right) && operandLitValueBits (right) == 0)
     {
@@ -4009,13 +4018,14 @@ genCmpEqNe (const iCode *ic, iCode *ifx)
         if (!compareOperandBytes (left, right, offset, false))
           return false;
         if (offset + 1 < size)
-          emitCondBranch ("bnz", is_ne ? true_label : false_label);
+          emitCondBranch ("bnz", is_ne ? labels.true_label :
+                          labels.false_label);
       }
 
-  emitCondBranch ("bnz", is_ne ? true_label : false_label);
-  emit2 ("br", "!%s", is_ne ? false_label : true_label);
+  emitCondBranch ("bnz", is_ne ? labels.true_label : labels.false_label);
+  emit2 ("br", "!%s", is_ne ? labels.false_label : labels.true_label);
 
-  finishComparison (result, ifx, true_label, false_label, done_label,
+  finishComparison (result, ifx, &labels,
                     size == 1 || (size == 2 && IS_OP_LITERAL (right)));
   return true;
 }
@@ -4024,12 +4034,9 @@ static bool
 genAffineByteCompare (const iCode *ic, iCode *ifx,
                       const affine_byte_compare *match)
 {
-  char true_label[32];
-  char false_label[32];
-  char done_label[32];
+  comparison_labels labels;
 
-  prepareComparisonLabels (ifx, true_label, false_label, done_label,
-                           sizeof (true_label));
+  prepareComparisonLabels (ifx, &labels);
   if (operandNeedsStackHL (match->lower.source, 1) ||
       operandNeedsStackHL (match->upper.source, 1))
     ensureStackAddress (0, K78K0_CLOBBER_AX, NULL);
@@ -4038,16 +4045,15 @@ genAffineByteCompare (const iCode *ic, iCode *ifx,
 
   emit2 ("add", "a,#0x%02x", match->bias);
   /* A carry makes the exact sum greater than every unsigned byte. */
-  emitCondBranch ("bc", false_label);
+  emitCondBranch ("bc", labels.false_label);
   if (operandByteOnStack (match->upper.source, 0))
     ensureStackAddress (0, K78K0_PRESERVE_A, "c");
   if (!aluOperandByteToA ("cmp", match->upper.source, 0))
     return false;
-  emitCondBranch ("bc", true_label);
-  emit2 ("br", "!%s", false_label);
+  emitCondBranch ("bc", labels.true_label);
+  emit2 ("br", "!%s", labels.false_label);
 
-  finishComparison (IC_RESULT (ic), ifx, true_label, false_label, done_label,
-                    false);
+  finishComparison (IC_RESULT (ic), ifx, &labels, false);
   return true;
 }
 
@@ -4060,9 +4066,7 @@ genCmpLtGt (const iCode *ic, iCode *ifx)
   const bool is_gt = ic->op == '>';
   bool is_unsigned;
   bool is_signed;
-  char true_label[32];
-  char false_label[32];
-  char done_label[32];
+  comparison_labels labels;
   byte_value_kind byte_kind;
   int size;
 
@@ -4096,7 +4100,7 @@ genCmpLtGt (const iCode *ic, iCode *ifx)
       is_signed = byte_kind == K78K0_BYTE_VALUE_SIGNED;
     }
 
-  prepareComparisonLabels (ifx, true_label, false_label, done_label, sizeof (true_label));
+  prepareComparisonLabels (ifx, &labels);
 
   if (is_signed && IS_OP_LITERAL (right))
     {
@@ -4122,10 +4126,11 @@ genCmpLtGt (const iCode *ic, iCode *ifx)
 
           const bool target_is_true = IC_TRUE (ifx);
           emitABitBranch (target_is_true == true_when_set, 7,
-                          target_is_true ? true_label : false_label);
-          emit2 ("br", "!%s", target_is_true ? false_label : true_label);
-          finishComparison (result, ifx, true_label, false_label, done_label,
-                            true);
+                          target_is_true ? labels.true_label :
+                          labels.false_label);
+          emit2 ("br", "!%s", target_is_true ? labels.false_label :
+                 labels.true_label);
+          finishComparison (result, ifx, &labels, true);
           return true;
         }
     }
@@ -4153,17 +4158,16 @@ genCmpLtGt (const iCode *ic, iCode *ifx)
         }
       if (is_gt)
         {
-          emitCondBranch ("bc", false_label);
-          emitCondBranch ("bz", false_label);
-          emit2 ("br", "!%s", true_label);
+          emitCondBranch ("bc", labels.false_label);
+          emitCondBranch ("bz", labels.false_label);
+          emit2 ("br", "!%s", labels.true_label);
         }
       else
         {
-          emitCondBranch ("bc", true_label);
-          emit2 ("br", "!%s", false_label);
+          emitCondBranch ("bc", labels.true_label);
+          emit2 ("br", "!%s", labels.false_label);
         }
-      finishComparison (result, ifx, true_label, false_label, done_label,
-                        true);
+      finishComparison (result, ifx, &labels, true);
       return true;
     }
 
@@ -4183,15 +4187,14 @@ genCmpLtGt (const iCode *ic, iCode *ifx)
           return true;
         }
 
-      emitCondBranch ("bc", true_label);
+      emitCondBranch ("bc", labels.true_label);
       if (offset)
-        emitCondBranch ("bnz", false_label);
+        emitCondBranch ("bnz", labels.false_label);
     }
 
-  emit2 ("br", "!%s", false_label);
+  emit2 ("br", "!%s", labels.false_label);
 
-  finishComparison (result, ifx, true_label, false_label, done_label,
-                    size == 1);
+  finishComparison (result, ifx, &labels, size == 1);
   return true;
 }
 

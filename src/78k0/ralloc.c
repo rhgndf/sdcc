@@ -202,16 +202,17 @@ k78k0_assignRegisters (ebbIndex *ebbi)
     {
       const int size = getSize (sym->type);
 
-      if (sym->isitmp && sym->regType != REG_CND && size > 0 && !sym->remat &&
-          !sym->regs[0] &&
-          (sym->liveTo > sym->liveFrom || size > 4 || IS_STRUCT (sym->type)) &&
-          !isDirectlyForwardedResult (sym))
-        {
-          if (!sym->usl.spillLoc)
-            k78k0SpillThis (sym);
-          else if (!sym->usl.spillLoc->allocreq)
-            sym->usl.spillLoc->allocreq++;
-        }
+      if (!sym->isitmp || sym->regType == REG_CND || size <= 0 || sym->remat)
+        continue;
+      if (sym->regs[0] || isDirectlyForwardedResult (sym))
+        continue;
+      if (sym->liveTo <= sym->liveFrom && size <= 4 && !IS_STRUCT (sym->type))
+        continue;
+
+      if (!sym->usl.spillLoc)
+        k78k0SpillThis (sym);
+      else if (!sym->usl.spillLoc->allocreq)
+        sym->usl.spillLoc->allocreq++;
     }
 
   if (currFunc)

@@ -837,6 +837,12 @@ k78k0_isPromotedUnsignedByte (const iCode *ic)
 }
 
 static bool
+k78k0_isByteLiteral (sym_link *type)
+{
+  return IS_LITERAL (type) && ulFromVal (valFromType (type)) <= 255;
+}
+
+static bool
 k78k0_hasNativeMulFor (iCode *ic, sym_link *left, sym_link *right)
 {
   const int result_size = IS_SYMOP (IC_RESULT (ic)) ? getSize (OP_SYM_TYPE (IC_RESULT (ic))) : 4;
@@ -849,8 +855,9 @@ k78k0_hasNativeMulFor (iCode *ic, sym_link *left, sym_link *right)
       if (getSize (left) > 2 || !SPEC_USIGN (getSpec (left)))
         return false;
 
-      return IS_LITERAL (right) ? ulFromVal (valFromType (right)) <= 255 :
-        getSize (right) == 1 && SPEC_USIGN (getSpec (right)) ||
+      if (IS_LITERAL (right))
+        return k78k0_isByteLiteral (right);
+      return (getSize (right) == 1 && SPEC_USIGN (getSpec (right))) ||
         k78k0_isPromotedUnsignedByte (ic);
     }
 
@@ -858,13 +865,15 @@ k78k0_hasNativeMulFor (iCode *ic, sym_link *left, sym_link *right)
       SPEC_BITINTWIDTH (OP_SYM_TYPE (IC_RESULT (ic))) % 8)
     return false;
 
-  if (IS_ITEMP (IC_RESULT (ic)) && result_size == 2 &&
-      ((IS_LITERAL (left) && ulFromVal (valFromType (left)) <= 255 && getSize (right) == 2) ||
-       (IS_LITERAL (right) && ulFromVal (valFromType (right)) <= 255 && getSize (left) == 2)))
+  if (!IS_ITEMP (IC_RESULT (ic)) || result_size > 2)
+    return false;
+
+  if (result_size == 2 &&
+      ((k78k0_isByteLiteral (left) && getSize (right) == 2) ||
+       (k78k0_isByteLiteral (right) && getSize (left) == 2)))
     return true;
 
-  return IS_ITEMP (IC_RESULT (ic)) && result_size <= 2 &&
-    getSize (left) == 1 && getSize (right) == 1;
+  return getSize (left) == 1 && getSize (right) == 1;
 }
 
 static bool

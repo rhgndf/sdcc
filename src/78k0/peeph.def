@@ -9,6 +9,29 @@ replace restart {
 	%3	%4
 } if same(%1 'and' 'or' 'xor'), same(%3 'bz' 'bnz')
 
+// INC and DEC already set Z, while MOV preserves it.  Reuse that flag when
+// the result is tested immediately instead of comparing the value with zero.
+
+replace restart {
+	%1	%2
+	mov	a,%2
+	cmp	a,#0x00
+	%3	%4
+} by {
+	%1	%2
+	mov	a,%2
+	%3	%4
+} if same(%1 'inc' 'dec'), same(%3 'bz' 'bnz')
+
+replace restart {
+	%1	a
+	cmp	a,#0x00
+	%2	%3
+} by {
+	%1	a
+	%2	%3
+} if same(%1 'inc' 'dec'), same(%2 'bz' 'bnz')
+
 // The indexed [HL+byte] form is one byte longer than the native [HL] form.
 
 replace restart {

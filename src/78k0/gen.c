@@ -107,12 +107,22 @@ typedef struct
 }
 scaled_index_match;
 
+typedef struct
+{
+  iCode *load;
+  iCode *store;
+  operand *pointer;
+  operand *source;
+}
+wide_pointer_rmw_match;
+
 static void genCritical (void);
 static void genEndCritical (void);
 static void emitByteShift (shift_kind kind);
 static void clearHLState (void);
 static bool typeReturnsViaHiddenPointer (sym_link *type);
 static int functionReturnSize (sym_link *type);
+static bool savePointerToDE (const operand *, long);
 static iCode *matchIndexedByteExtraction (const iCode *, operand **,
                                           byte_offset *);
 static iCode *matchWideContributionAdd (const iCode *, operand **,
@@ -647,6 +657,102 @@ soleConsumer (const operand *op)
   if (!sym || bitVectnBitsOn (sym->uses) != 1)
     return NULL;
   return hTabItemWithKey (iCodehTab, bitVectFirstBit (sym->uses));
+}
+
+static bool
+widePointerRmwLoadCanBeDeferred (const iCode *load, const iCode *binary)
+{
+  const iCode *walk;
+
+  for (walk = load->next; walk && walk != binary; walk = walk->next)
+    {
+      const operand *left = IC_LEFT (walk);
+      const operand *right = IC_RIGHT (walk);
+      const operand *result = IC_RESULT (walk);
+
+      /* The fused sequence performs the destination load at the binary
+         operation.  Do not move it across anything that can alter observable
+         memory state or whose ordering is itself observable. */
+      if (SKIP_IC (walk) || walk->op == IFX ||
+          walk->op == SET_VALUE_AT_ADDRESS ||
+          walk->op == DUMMY_READ_VOLATILE || POINTER_SET (walk) ||
+          IS_TRUE_SYMOP (result) ||
+          (left && left->isvolatile) || (right && right->isvolatile) ||
+          (result && result->isvolatile))
+        return false;
+    }
+
+  return walk == binary;
+}
+
+static bool
+matchWidePointerRmw (const iCode *binary, wide_pointer_rmw_match *match)
+{
+  iCode *store;
+  operand *store_pointer;
+  operand *store_value;
+  operand *operands[2];
+  int size;
+
+  if (!binary ||
+      (binary->op != BITWISEAND && binary->op != '|' && binary->op != '^') ||
+      !(store_value = IC_RESULT (binary)) || !IS_ITEMP (store_value))
+    return false;
+
+  size = k78k0_operandSize (store_value);
+  if (size <= 2 || !isScalarSize (size) ||
+      !(store = soleConsumer (store_value)) || store != binary->next ||
+      store->block != binary->block ||
+      !(store_pointer = pointerSetAddress (store)) ||
+      !IC_RIGHT (store) ||
+      !sameSymbolOperand (IC_RIGHT (store), store_value))
+    return false;
+
+  sym_link *stored_type = pointerSetTargetType (store);
+  if (store_pointer->isvolatile ||
+      (stored_type && IS_VOLATILE (stored_type)))
+    return false;
+
+  operands[0] = IC_LEFT (binary);
+  operands[1] = IC_RIGHT (binary);
+  for (int destination = 0; destination < 2; destination++)
+    {
+      operand *loaded = operands[destination];
+      operand *source = operands[!destination];
+      iCode *load = soleDefinition (loaded);
+
+      if (!load || load->op != GET_VALUE_AT_ADDRESS ||
+          load->block != binary->block || soleConsumer (loaded) != binary ||
+          !IC_LEFT (load) || !IC_RIGHT (load) ||
+          !IS_OP_LITERAL (IC_RIGHT (load)) ||
+          operandLitValueUll (IC_RIGHT (load)) != 0 ||
+          !isOperandEqual (IC_LEFT (load), store_pointer) ||
+          !widePointerRmwLoadCanBeDeferred (load, binary) ||
+          loaded->isvolatile || k78k0_operandSize (loaded) != size ||
+          !source || source->isvolatile ||
+          k78k0_operandSize (source) != size ||
+          sameSymbolOperand (loaded, source))
+        continue;
+
+      if (match)
+        *match = (wide_pointer_rmw_match)
+          {.load = load, .store = store, .pointer = store_pointer,
+           .source = source};
+      return true;
+    }
+
+  return false;
+}
+
+static bool
+deferredWidePointerRmwLoad (const iCode *load)
+{
+  iCode *consumer = load && IC_RESULT (load) ?
+    soleConsumer (IC_RESULT (load)) : NULL;
+  wide_pointer_rmw_match match;
+
+  return consumer && matchWidePointerRmw (consumer, &match) &&
+    match.load == load;
 }
 
 static bool
@@ -1273,6 +1379,15 @@ k78k0InstructionTraits (const iCode *ic)
       traits.clobbers = fusion_clobbers;
       if (dynamic_offset)
         traits.left = traits.right = 0;
+      return traits;
+    }
+
+  wide_pointer_rmw_match pointer_rmw;
+  if (matchWidePointerRmw (ic, &pointer_rmw))
+    {
+      traits.clobbers = K78K0_MASK_AX | K78K0_MASK_DE | K78K0_MASK_HL;
+      traits.left = traits.right =
+        K78K0_MASK_AX | K78K0_MASK_DE | K78K0_MASK_HL;
       return traits;
     }
 
@@ -3208,6 +3323,33 @@ genInPlaceByteRegisterOp (const iCode *ic, const char *mnemonic)
 }
 
 static bool
+genWidePointerRmw (const iCode *ic, const wide_pointer_rmw_match *match,
+                   const char *mnemonic)
+{
+  const int size = k78k0_operandSize (IC_RESULT (ic));
+
+  if (operandNeedsStackHL (match->source, size))
+    ensureStackAddress (0, K78K0_CLOBBER_AX, NULL);
+  if (!savePointerToDE (match->pointer, 0))
+    return false;
+
+  for (int offset = 0; offset < size; offset++)
+    {
+      emit2 ("mov", "a,[de]");
+      if (!aluOperandByteToA (mnemonic, match->source, offset))
+        return false;
+      if (offset == size - 1)
+        maskUnsignedBitIntTopByteInA (IC_RESULT (ic));
+      emit2 ("mov", "[de],a");
+      if (offset + 1 < size)
+        emit2 ("incw", "de");
+    }
+
+  markGenerated (match->store);
+  return true;
+}
+
+static bool
 genBinaryAccumulatorOp (const iCode *ic, const char *low_mnemonic, const char *high_mnemonic)
 {
   operand *result = IC_RESULT (ic);
@@ -3224,6 +3366,11 @@ genBinaryAccumulatorOp (const iCode *ic, const char *low_mnemonic, const char *h
   size = k78k0_operandSize (result);
   if (!isScalarSize (size))
     return false;
+
+  wide_pointer_rmw_match pointer_rmw;
+  if (!uses_carry && matchWidePointerRmw (ic, &pointer_rmw))
+    return genWidePointerRmw (ic, &pointer_rmw, low_mnemonic);
+
   if (size == 2)
     return !uses_carry && genWordBinaryOp (ic, low_mnemonic, high_mnemonic);
 
@@ -6536,6 +6683,98 @@ genWordRot (const operand *result, const operand *left, unsigned count)
 }
 
 static bool
+rotateTargetOne (const operand *target, const int size, const bool right)
+{
+  const bool direct_carry = operandAccessPreservesCarry (target, size);
+
+  if (!loadOperandByteToA (target, right ? 0 : size - 1))
+    return false;
+  emit2 ("mov1", "cy,a.%u", right ? 0u : 7u);
+  if (!direct_carry)
+    pushTracked ("psw", 1);
+
+  for (int i = 0; i < size; i++)
+    {
+      const int offset = right ? size - 1 - i : i;
+
+      if (!loadOperandByteToA (target, offset))
+        return false;
+      if (!direct_carry)
+        popTracked ("psw", 1);
+      emit2 (right ? "rorc" : "rolc", "a,1");
+      if (i + 1 < size && !direct_carry)
+        pushTracked ("psw", 1);
+      if (!storeAToOperandByte (target, offset))
+        return false;
+    }
+
+  return true;
+}
+
+static bool
+rotateTargetByBits (const operand *target, const int size, const bool right,
+                    const unsigned count)
+{
+  char loop_label[32];
+
+  wassertl (count > 0 && count < 8, "78K0 invalid residual rotate count.");
+
+  if (count > 1)
+    {
+      makeLocalLabel (loop_label, sizeof (loop_label));
+      emit2 ("mov", "b,#0x%02x", count);
+      emitLocalLabelPreservingHL (loop_label);
+    }
+
+  if (!rotateTargetOne (target, size, right))
+    return false;
+
+  if (count > 1)
+    emit2 ("dbnz", "b,%s", loop_label);
+  return true;
+}
+
+static bool
+wideRotateOperandsIndependent (const operand *left, const operand *target,
+                               const int size)
+{
+  asmop source_aop, target_aop;
+
+  if (!aopForOperand (&source_aop, left) ||
+      !aopForOperand (&target_aop, target))
+    return false;
+  if (source_aop.type != K78K0_AOP_LITERAL && source_aop.storage &&
+      source_aop.storage == target_aop.storage)
+    return false;
+
+  for (int source = 0; source < size; source++)
+    for (int destination = 0; destination < size; destination++)
+      if (source_aop.regs[source] &&
+          source_aop.regs[source] == target_aop.regs[destination])
+        return false;
+
+  return true;
+}
+
+static bool
+copyRotatedBytesToTarget (const operand *left, const operand *target,
+                          const int size, const bool right,
+                          const unsigned byte_count)
+{
+  for (int offset = 0; offset < size; offset++)
+    {
+      const int source_offset = right ? (offset + byte_count) % size :
+        (offset + size - byte_count) % size;
+
+      if (!loadOperandByteToA (left, source_offset) ||
+          !storeAToOperandByte (target, offset))
+        return false;
+    }
+
+  return true;
+}
+
+static bool
 genWideRot (const iCode *ic, const unsigned original_count)
 {
   static const unsigned char copy_order[4] = {0, 2, 3, 1};
@@ -6560,6 +6799,21 @@ genWideRot (const iCode *ic, const unsigned original_count)
     count = bits - count;
   const unsigned byte_count = count / 8u;
   const unsigned residual = count % 8u;
+
+  /* With no whole-byte permutation, the assigned result is already a safe
+     work area.  Rotating there avoids a second temporary stack object and a
+     redundant copy, just as the wide-shift path does. */
+  if (!byte_count || wideRotateOperandsIndependent (left, target, size))
+    {
+      if (!(byte_count ?
+            copyRotatedBytesToTarget (left, target, size, rotate_right,
+                                      byte_count) :
+            copyOperandToTarget (left, target, size)) ||
+          residual && !rotateTargetByBits (target, size, rotate_right, residual))
+        return false;
+      return finishWideAssignment (ic, result, target);
+    }
+
   const bool saved_ax = operandUsesPair (left, "ax");
   if (saved_ax)
     emit2 ("movw", "de,ax");
@@ -7119,6 +7373,8 @@ lowerIcode (iCode *ic)
       return genAddrOf (ic);
 
     case GET_VALUE_AT_ADDRESS:
+      if (deferredWidePointerRmwLoad (ic))
+        return true;
       return genPointerGet (ic);
 
     case SET_VALUE_AT_ADDRESS:

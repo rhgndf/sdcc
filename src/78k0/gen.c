@@ -729,32 +729,6 @@ soleConsumer (const operand *op)
 }
 
 static bool
-widePointerRmwLoadCanBeDeferred (const iCode *load, const iCode *binary)
-{
-  const iCode *walk;
-
-  for (walk = load->next; walk && walk != binary; walk = walk->next)
-    {
-      const operand *left = IC_LEFT (walk);
-      const operand *right = IC_RIGHT (walk);
-      const operand *result = IC_RESULT (walk);
-
-      /* The fused sequence performs the destination load at the binary
-         operation.  Do not move it across anything that can alter observable
-         memory state or whose ordering is itself observable. */
-      if (SKIP_IC (walk) || walk->op == IFX ||
-          walk->op == SET_VALUE_AT_ADDRESS ||
-          walk->op == DUMMY_READ_VOLATILE || POINTER_SET (walk) ||
-          IS_TRUE_SYMOP (result) ||
-          (left && left->isvolatile) || (right && right->isvolatile) ||
-          (result && result->isvolatile))
-        return false;
-    }
-
-  return walk == binary;
-}
-
-static bool
 matchWidePointerRmw (const iCode *binary, wide_pointer_rmw_match *match)
 {
   iCode *store;
@@ -796,7 +770,7 @@ matchWidePointerRmw (const iCode *binary, wide_pointer_rmw_match *match)
           !IS_OP_LITERAL (IC_RIGHT (load)) ||
           operandLitValueUll (IC_RIGHT (load)) != 0 ||
           !isOperandEqual (IC_LEFT (load), store_pointer) ||
-          !widePointerRmwLoadCanBeDeferred (load, binary) ||
+          load->next != binary ||
           loaded->isvolatile || k78k0_operandSize (loaded) != size ||
           !source || source->isvolatile ||
           k78k0_operandSize (source) != size ||
@@ -6172,92 +6146,12 @@ genPointerSet (const iCode *ic)
 }
 
 static bool
-icodeReadsOperand (const iCode *ic, const operand *op)
-{
-  return ic && op &&
-    (sameSymbolOperand (IC_LEFT (ic), op) ||
-     sameSymbolOperand (IC_RIGHT (ic), op) ||
-     (POINTER_SET (ic) && sameSymbolOperand (IC_RESULT (ic), op)));
-}
-
-static bool
-icodeDefinesOperand (const iCode *ic, const operand *op)
-{
-  return ic && op && !POINTER_SET (ic) &&
-    sameSymbolOperand (IC_RESULT (ic), op);
-}
-
-/* DIVUW produces quotient and remainder together.  When a modulo is followed
-   shortly by division of the same nonvolatile temporary by the same literal,
-   save the otherwise-discarded quotient directly into the later spilled
-   result.  Restricting the hidden early definition to stack storage keeps the
-   register allocator's ordinary survivor model exact. */
-static iCode *
-matchFollowingDivision (const iCode *mod)
-{
-  operand *dividend;
-  iCode *division = NULL;
-  bool intermediate_reads_dividend = false;
-  int distance = 0;
-
-  if (regalloc_dry_run || !mod || mod->op != '%' ||
-      !(dividend = IC_LEFT (mod)) || !IS_ITEMP (dividend) ||
-      dividend->isvolatile || !IS_OP_LITERAL (IC_RIGHT (mod)))
-    return NULL;
-
-  for (iCode *candidate = mod->next;
-       candidate && candidate->block == mod->block && distance++ < 8;
-       candidate = candidate->next)
-    {
-      if (candidate->op == '/' &&
-          sameSymbolOperand (IC_LEFT (candidate), dividend) &&
-          IS_OP_LITERAL (IC_RIGHT (candidate)) &&
-          operandLitValueBits (IC_RIGHT (candidate)) ==
-            operandLitValueBits (IC_RIGHT (mod)))
-        {
-          division = candidate;
-          break;
-        }
-
-      if (icodeDefinesOperand (candidate, dividend))
-        return NULL;
-      intermediate_reads_dividend |= icodeReadsOperand (candidate, dividend);
-    }
-
-  if (!division || !IS_ITEMP (IC_RESULT (division)) ||
-      IC_RESULT (division)->isvolatile ||
-      k78k0_operandSize (IC_RESULT (division)) < 1 ||
-      k78k0_operandSize (IC_RESULT (division)) > 2 ||
-      !operandNeedsStackHL (IC_RESULT (division),
-                            k78k0_operandSize (IC_RESULT (division))))
-    return NULL;
-
-  /* Writing x = x / c early is safe only when the original x has no
-     intervening use.  A distinct quotient result likewise must not expose its
-     new value before the source-level division point. */
-  if (sameSymbolOperand (IC_RESULT (division), dividend))
-    {
-      if (intermediate_reads_dividend)
-        return NULL;
-    }
-  else
-    for (const iCode *candidate = mod->next; candidate != division;
-         candidate = candidate->next)
-      if (icodeReadsOperand (candidate, IC_RESULT (division)) ||
-          icodeDefinesOperand (candidate, IC_RESULT (division)))
-        return NULL;
-
-  return division;
-}
-
-static bool
 genDivMod (const iCode *ic)
 {
   operand *result = IC_RESULT (ic);
   operand *left = IC_LEFT (ic);
   operand *right = IC_RIGHT (ic);
   const bool is_mod = ic->op == '%';
-  iCode *following_division;
   int result_size;
 
   if (!IS_ITEMP (result) || !left || !right || !isUnsignedByteDivisor (ic))
@@ -6269,8 +6163,6 @@ genDivMod (const iCode *ic)
 
   if (getSize (operandType (left)) > 2 || !SPEC_USIGN (getSpec (operandType (left))))
     return false;
-
-  following_division = is_mod ? matchFollowingDivision (ic) : NULL;
 
   const bool left_needs_hl =
     operandNeedsStackHL (left, getSize (operandType (left)));
@@ -6302,16 +6194,6 @@ genDivMod (const iCode *ic)
     }
 
   emit2 ("divuw", "c");
-
-  if (following_division)
-    {
-      const int quotient_size = k78k0_operandSize (IC_RESULT (following_division));
-
-      if (quotient_size == 1)
-        emit2 ("mov", "a,x");
-      setReturnResult (IC_RESULT (following_division), quotient_size);
-      markGenerated (following_division);
-    }
 
   if (is_mod)
     {

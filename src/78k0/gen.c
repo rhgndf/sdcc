@@ -95,23 +95,6 @@ byte_offset;
 
 typedef struct
 {
-  iCode *cast;
-  iCode *adjust;
-  operand *source;
-  int offset;
-}
-affine_byte_term;
-
-typedef struct
-{
-  affine_byte_term lower;
-  affine_byte_term upper;
-  unsigned bias;
-}
-affine_byte_compare;
-
-typedef struct
-{
   operand *source;
   operand *base;
   operand *index;
@@ -813,164 +796,6 @@ unsignedByteCast (const operand *op)
 
   return cast && cast->op == CAST && IC_RIGHT (cast) &&
     isUnsignedByteSource (IC_RIGHT (cast)) ? cast : NULL;
-}
-
-static bool
-stableAffineByteSource (const operand *source, const iCode *compare)
-{
-  if (IS_OP_LITERAL (source))
-    return true;
-  if (!IS_SYMOP (source) || source->isvolatile ||
-      operandHasAllocatedByte (source))
-    return false;
-
-  const symbol *sym = OP_SYMBOL_CONST (source);
-  const symbol *storage = operandStorageSymbol (source);
-  return !(IS_ITEMP (source) && (sym->remat || sym->liveTo < compare->seq)) &&
-    storage && (storage->onStack || storage->rname[0]);
-}
-
-static bool
-matchAffineByteTerm (operand *op, const iCode *compare,
-                     affine_byte_term *term)
-{
-  operand *base = op;
-  operand *source;
-  iCode *cast;
-  iCode *definition;
-  iCode *adjust = NULL;
-  int offset = 0;
-
-  if (!isIntegralOperand (op))
-    return false;
-
-  definition = soleDefinition (op);
-  if (definition && (definition->op == '+' || definition->op == '-'))
-    {
-      operand *literal = NULL;
-
-      adjust = definition;
-      if (soleConsumer (op) != compare)
-        return false;
-      if (IS_OP_LITERAL (IC_RIGHT (adjust)))
-        {
-          base = IC_LEFT (adjust);
-          literal = IC_RIGHT (adjust);
-        }
-      else if (adjust->op == '+' && IS_OP_LITERAL (IC_LEFT (adjust)))
-        {
-          base = IC_RIGHT (adjust);
-          literal = IC_LEFT (adjust);
-        }
-      if (!isIntegralOperand (literal))
-        return false;
-
-      const double value = operandLitValue (literal);
-      if (value < -255.0 || value > 255.0 || value != (int)value)
-        return false;
-      offset = (adjust->op == '-' ? -1 : 1) * (int)value;
-    }
-
-  cast = unsignedByteCast (base);
-  if (cast)
-    {
-      source = IC_RIGHT (cast);
-      if (cast->block != compare->block ||
-          !stableAffineByteSource (source, compare))
-        return false;
-    }
-  else
-    {
-      source = base;
-      if (!operandValueInRange (compare, source, 0, 255) ||
-          (adjust && !stableAffineByteSource (source, compare)))
-        return false;
-    }
-
-  if ((adjust && adjust->block != compare->block) || source->isvolatile)
-    return false;
-
-  *term = (affine_byte_term){cast, adjust, source, offset};
-  return true;
-}
-
-static bool
-matchAffineByteCompare (const iCode *compare, affine_byte_compare *match)
-{
-  affine_byte_term lower;
-  affine_byte_term upper;
-  operand *left;
-  operand *right;
-  int size;
-
-  if (!compare || (compare->op != '<' && compare->op != '>'))
-    return false;
-
-  left = IC_LEFT (compare);
-  right = IC_RIGHT (compare);
-  if (!isIntegralOperand (left) || !isIntegralOperand (right))
-    return false;
-  if (SPEC_USIGN (getSpec (operandType (left))) ||
-      SPEC_USIGN (getSpec (operandType (right))))
-    return false;
-
-  size = k78k0_operandSize (left);
-  if (size < 2 || size > K78K0_MAX_SCALAR_BYTES ||
-      size != k78k0_operandSize (right))
-    return false;
-  if (bitsForType (operandType (left)) < 10 ||
-      bitsForType (operandType (left)) != bitsForType (operandType (right)))
-    return false;
-
-  if (!matchAffineByteTerm (compare->op == '<' ? left : right,
-                            compare, &lower) ||
-      !matchAffineByteTerm (compare->op == '<' ? right : left,
-                            compare, &upper))
-    return false;
-
-  const int bias = lower.offset - upper.offset;
-  if (bias < 1 || bias > 255)
-    return false;
-
-  iCode *first = NULL;
-  iCode *producers[] =
-    {lower.cast, lower.adjust, upper.cast, upper.adjust};
-
-  for (unsigned i = 0; i < sizeof (producers) / sizeof (*producers); i++)
-    if (producers[i] && (!first || producers[i]->seq < first->seq))
-      first = producers[i];
-  if (!first)
-    return false;
-
-  for (iCode *ic = first; ic != compare; ic = ic->next)
-    {
-      if (!ic || (ic->op != CAST && ic->op != '+' && ic->op != '-'))
-        return false;
-      if (!IS_ITEMP (IC_RESULT (ic)) ||
-          (IC_LEFT (ic) && IC_LEFT (ic)->isvolatile) ||
-          (IC_RIGHT (ic) && IC_RIGHT (ic)->isvolatile) ||
-          IC_RESULT (ic)->isvolatile)
-        return false;
-    }
-
-  *match = (affine_byte_compare){lower, upper, (unsigned)bias};
-  return true;
-}
-
-static bool
-affineByteComparisonProducer (const iCode *producer)
-{
-  if (!producer)
-    return false;
-
-  iCode *consumer = soleConsumer (IC_RESULT (producer));
-  if (consumer && (consumer->op == '+' || consumer->op == '-'))
-    consumer = soleConsumer (IC_RESULT (consumer));
-
-  affine_byte_compare match;
-  return matchAffineByteCompare (consumer, &match) &&
-    (producer == match.lower.cast || producer == match.lower.adjust ||
-     producer == match.upper.cast || producer == match.upper.adjust);
 }
 
 static byte_value_kind
@@ -4311,33 +4136,6 @@ genCmpEqNe (const iCode *ic, iCode *ifx)
 }
 
 static bool
-genAffineByteCompare (const iCode *ic, iCode *ifx,
-                      const affine_byte_compare *match)
-{
-  comparison_labels labels;
-
-  prepareComparisonLabels (ifx, &labels);
-  if (operandNeedsStackHL (match->lower.source, 1) ||
-      operandNeedsStackHL (match->upper.source, 1))
-    ensureStackAddress (0, K78K0_CLOBBER_AX, NULL);
-  if (!loadOperandByteToA (match->lower.source, 0))
-    return false;
-
-  emit2 ("add", "a,#0x%02x", match->bias);
-  /* A carry makes the exact sum greater than every unsigned byte. */
-  emitCondBranch ("bc", labels.false_label);
-  if (operandByteOnStack (match->upper.source, 0))
-    ensureStackAddress (0, K78K0_PRESERVE_A, "c");
-  if (!aluOperandByteToA ("cmp", match->upper.source, 0))
-    return false;
-  emitCondBranch ("bc", labels.true_label);
-  emit2 ("br", "!%s", labels.false_label);
-
-  finishComparison (IC_RESULT (ic), ifx, &labels, false);
-  return true;
-}
-
-static bool
 genCmpLtGt (const iCode *ic, iCode *ifx)
 {
   operand *result = IC_RESULT (ic);
@@ -4352,14 +4150,6 @@ genCmpLtGt (const iCode *ic, iCode *ifx)
 
   if (!IS_ITEMP (result) || !left || !right)
     return false;
-
-  if (!regalloc_dry_run)
-    {
-      affine_byte_compare match;
-
-      if (matchAffineByteCompare (ic, &match))
-        return genAffineByteCompare (ic, ifx, &match);
-    }
 
   is_unsigned = SPEC_USIGN (getSpec (operandType (left))) &&
     SPEC_USIGN (getSpec (operandType (right)));
@@ -7412,9 +7202,6 @@ resultRemat (const iCode *ic)
 static bool
 lowerIcode (iCode *ic)
 {
-  if (!regalloc_dry_run && affineByteComparisonProducer (ic))
-    return true;
-
   if (!regalloc_dry_run &&
       (ic->op == '*' || ic->op == LEFT_OP || ic->op == RIGHT_OP))
     {

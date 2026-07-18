@@ -13,6 +13,7 @@
 
 #include "ralloc.h"
 #include "gen.h"
+#include "peep.h"
 #include "dbuf_string.h"
 
 extern const char *iComments2;
@@ -932,9 +933,9 @@ PORT k78k0_port =
     NULL,
     NULL,
     NULL,
+    k78k0notUsed,
     NULL,
-    NULL,
-    NULL,
+    k78k0notUsedFrom,
     NULL,
     NULL,
     NULL,

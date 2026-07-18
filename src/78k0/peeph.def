@@ -65,6 +65,60 @@ replace {
 	mov	%1,%2
 } if same(%1 'a' 'x' 'b' 'c' 'd' 'e' 'l' 'h'), same(%2 'a' 'x' 'b' 'c' 'd' 'e' 'l' 'h'), notSame(%1 %2)
 
+// Copying A to registers does not change A.  Avoid reconstructing the same
+// value from the first copy immediately afterward.
+
+replace restart {
+	mov	%1,a
+	mov	%2,a
+	mov	a,%1
+} by {
+	mov	%1,a
+	mov	%2,a
+} if same(%1 'x' 'b' 'c' 'd' 'e' 'l' 'h'), same(%2 'x' 'b' 'c' 'd' 'e' 'l' 'h')
+
+// CMP and a conditional branch preserve A.  A register copy made before the
+// comparison therefore need not be reloaded on the fall-through path.
+
+replace restart {
+	mov	%1,a
+	cmp	a,%2
+	%3	%4
+	mov	a,%1
+} by {
+	mov	%1,a
+	cmp	a,%2
+	%3	%4
+} if same(%1 'x' 'b' 'c' 'd' 'e' 'l' 'h'), same(%3 'bz' 'bnz' 'bc' 'bnc')
+
+// MOV does not affect flags.  Once all reads of its register destination
+// have disappeared, discard the copy while retaining volatile source reads.
+
+replace restart {
+	mov	%1,%2
+} by {
+} if same(%1 'a' 'x' 'b' 'c' 'd' 'e' 'l' 'h'), notUsed(%1), notVolatile(%2)
+
+replace restart {
+	movw	%1,%2
+} by {
+} if same(%1 'ax' 'bc' 'de' 'hl'), notUsed(%1), notVolatile(%2)
+
+// Preserving AX while reconstructing HL from SP costs an extra pair move and
+// exchange.  A following stack-byte load overwrites A; if the old X byte is
+// dead as well, construct the stack address directly.
+
+replace restart {
+	movw	hl,ax
+	movw	ax,sp
+	xchw	ax,hl
+	mov	a,[hl%1
+} by {
+	movw	ax,sp
+	movw	hl,ax
+	mov	a,[hl%1
+} if notUsed('x')
+
 replace {
 	movw	%1,%2
 	movw	%2,%1

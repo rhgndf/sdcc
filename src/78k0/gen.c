@@ -17,6 +17,17 @@
 #define K78K0_RETURN_ADDRESS_BYTES 2
 #define K78K0_REGISTER_RETURN_BYTES 4
 
+typedef struct stack_label_cache
+{
+  bool ready;
+  int sp_offset;
+  int stack_pushed;
+  char public_label[32];
+  char cached_label[32];
+  struct stack_label_cache *next;
+}
+stack_label_cache;
+
 static struct
 {
   struct
@@ -32,6 +43,8 @@ static struct
     int sp_offset;
   }
   hl;
+  stack_label_cache *stack_label_caches;
+  stack_label_cache *pending_stack_label_cache;
 }
 G;
 
@@ -122,7 +135,10 @@ static void emitByteShift (shift_kind kind);
 static void clearHLState (void);
 static bool typeReturnsViaHiddenPointer (sym_link *type);
 static int functionReturnSize (sym_link *type);
+static bool isUnsignedByteDivisor (const iCode *);
 static bool savePointerToDE (const operand *, long);
+static bool absoluteSymbolAddress (const symbol *, int, unsigned *);
+static bool isOneByteDirectAddress (unsigned);
 static iCode *matchIndexedByteExtraction (const iCode *, operand **,
                                           byte_offset *);
 static iCode *matchWideContributionAdd (const iCode *, operand **,
@@ -134,6 +150,21 @@ static unsigned regalloc_dry_run_cost_bytes;
 static unsigned regalloc_dry_label;
 static symbol regalloc_dry_spill;
 static unsigned codegen_label_scope;
+
+static void
+resetGeneratorState (void)
+{
+  stack_label_cache *cache = G.stack_label_caches;
+
+  while (cache)
+    {
+      stack_label_cache *next = cache->next;
+
+      Safe_free (cache);
+      cache = next;
+    }
+  memset (&G, 0, sizeof G);
+}
 
 static void
 markGenerated (iCode *ic)
@@ -156,6 +187,11 @@ emit2 (const char *inst, const char *fmt, ...)
 {
   va_list ap;
   const char *line;
+
+  /* A cached loop entry may only bypass the very first real instruction
+     following its public label.  Comments and labels emit no code. */
+  if (inst[0] && strcmp (inst, ";"))
+    G.pending_stack_label_cache = NULL;
 
   va_start (ap, fmt);
   line = format_opcode (inst, fmt, ap);
@@ -181,6 +217,7 @@ static void
 clearHLState (void)
 {
   G.hl.offset_valid = false;
+  G.pending_stack_label_cache = NULL;
 }
 
 static void
@@ -403,6 +440,20 @@ emitLocalLabelPreservingHL (const char *label)
     genLine.lineCurr->isLabel = 1;
 }
 
+static const char *
+cachedStackBranchTarget (const char *target)
+{
+  if (!regalloc_dry_run && G.hl.offset_valid)
+    for (const stack_label_cache *cache = G.stack_label_caches; cache;
+         cache = cache->next)
+      if (cache->ready && cache->sp_offset == G.hl.sp_offset &&
+          cache->stack_pushed == G.stack.pushed &&
+          !strcmp (cache->public_label, target))
+        return cache->cached_label;
+
+  return target;
+}
+
 static void
 emitCondBranch (const char *inst, const char *label)
 {
@@ -411,6 +462,7 @@ emitCondBranch (const char *inst, const char *label)
                         !strcmp (inst, "bc") ? "bnc" : !strcmp (inst, "bnc") ? "bc" : NULL;
 
   wassertl (inverse, "unsupported 78K0 conditional branch");
+  label = cachedStackBranchTarget (label);
   makeLocalLabel (skip_label, sizeof (skip_label));
   emit2 (inverse, "%s", skip_label);
   emit2 ("br", "!%s", label);
@@ -422,6 +474,7 @@ emitABitBranch (const bool branch_if_set, const unsigned bit, const char *label)
 {
   char skip_label[32];
 
+  label = cachedStackBranchTarget (label);
   makeLocalLabel (skip_label, sizeof (skip_label));
   emit2 (branch_if_set ? "bf" : "bt", "a.%u,%s", bit, skip_label);
   emit2 ("br", "!%s", label);
@@ -491,6 +544,13 @@ static void
 setStackAddress (const int stack_offset, const stack_address_preservation preserve,
                  const char *scratch)
 {
+  stack_label_cache *cache = preserve == K78K0_PRESERVE_AX ?
+    G.pending_stack_label_cache : NULL;
+
+  /* Keep the candidate out of emit2()/clearHLState() while emitting the
+     setup itself.  Other setup forms deliberately invalidate it. */
+  G.pending_stack_label_cache = NULL;
+
   if (preserve == K78K0_PRESERVE_A)
     {
       wassertl (scratch, "78K0 stack address setup needs an A scratch register.");
@@ -514,6 +574,15 @@ setStackAddress (const int stack_offset, const stack_address_preservation preser
 
   G.hl.offset_valid = true;
   G.hl.sp_offset = stack_offset;
+
+  if (cache)
+    {
+      makeLocalLabel (cache->cached_label, sizeof (cache->cached_label));
+      cache->ready = true;
+      cache->sp_offset = stack_offset;
+      cache->stack_pushed = G.stack.pushed;
+      emitLocalLabelPreservingHL (cache->cached_label);
+    }
 }
 
 static void
@@ -1396,7 +1465,14 @@ k78k0InstructionTraits (const iCode *ic)
     case '=':
       if (!POINTER_SET (ic))
         {
-          traits.clobbers = K78K0_MASK_AX | K78K0_MASK_C;
+          unsigned address;
+          const symbol *storage = operandStorageSymbol (result);
+
+          /* A literal byte can be encoded directly into saddr/SFR space;
+             unlike the generic byte move, this form does not use A. */
+          traits.clobbers = IS_OP_LITERAL (right) && result_size == 1 &&
+            absoluteSymbolAddress (storage, 0, &address) &&
+            isOneByteDirectAddress (address) ? 0 : K78K0_MASK_AX | K78K0_MASK_C;
           traits.right = 0;
           break;
         }
@@ -1539,8 +1615,17 @@ k78k0InstructionTraits (const iCode *ic)
       break;
     case '/':
     case '%':
-      traits.clobbers = result_size == 1 ? K78K0_MASK_AX | K78K0_MASK_C : K78K0_MASK_ALL;
-      if (left_size == 1)
+      if (!IS_ITEMP (result) || !left || !right ||
+          !isUnsignedByteDivisor (ic) || left_size > 2 ||
+          !SPEC_USIGN (getSpec (operandType (left))) ||
+          result_size < 1 || result_size > 2)
+        break;
+      /* Native DIVUW consumes AX and C regardless of whether the quotient or
+         remainder is widened to a word.  Stack operands add HL in ralloc2;
+         keeping the base mask precise lets independent values survive in B,
+         DE, or HL instead of forcing an otherwise unnecessary spill frame. */
+      traits.clobbers = K78K0_MASK_AX | K78K0_MASK_C;
+      if (left_size == 1 || IS_OP_LITERAL (right))
         traits.left = 0;
       if (right_size == 1)
         traits.right = 0;
@@ -1568,6 +1653,8 @@ k78k0InstructionTraits (const iCode *ic)
       /* Boolean materialization can accumulate a multi-byte or spilled
          two-byte source in B before producing its one-byte result. */
       traits.clobbers = result_size == 1 ? K78K0_MASK_AX | K78K0_MASK_BC :
+        ic->op == CAST && result_size == right_size ?
+          K78K0_MASK_AX | K78K0_MASK_C :
         ic->op == CAST && right_size == 1 && result_size == 2 ?
           K78K0_MASK_AX : K78K0_MASK_ALL;
       if (ic->op == CAST)
@@ -1670,9 +1757,7 @@ functionNeedsDESave (const iCode *function, sym_link *type,
     {
       const iCode *fused_end = fusedSequenceEnd (ic);
 
-      if (bitVectBitValue (ic->rMask, K78K0_RB0_E_IDX) ||
-          bitVectBitValue (ic->rMask, K78K0_RB0_D_IDX) ||
-          (k78k0InstructionTraits (ic).clobbers & K78K0_MASK_DE))
+      if (k78k0InstructionTraits (ic).clobbers & K78K0_MASK_DE)
         return true;
 
       /* Intermediate followers are not emitted.  The anchor already sees
@@ -1683,7 +1768,7 @@ functionNeedsDESave (const iCode *function, sym_link *type,
           ic = ic->next;
           wassert (ic);
         }
-      if (fused_end && !POINTER_SET (ic) &&
+      if (!POINTER_SET (ic) &&
           (operandRegisterMask (IC_RESULT (ic)) & K78K0_MASK_DE))
         return true;
     }
@@ -1799,7 +1884,7 @@ genFunction (const iCode *ic)
   const asmop *first_argument = aopArg (type, 1);
   const int first_regarg_size = first_argument ? first_argument->size : 0;
 
-  memset (&G, 0, sizeof G);
+  resetGeneratorState ();
   G.stack.saved_de_bytes = functionNeedsDESave (ic, type, first_regarg_size) ? 2 : 0;
   G.stack.local_size = frame_local_size + G.stack.saved_de_bytes;
   emit2 ("", "%s:", sym->rname);
@@ -1819,32 +1904,31 @@ genFunction (const iCode *ic)
       emit2 ("push", "hl");
     }
 
-  if (first_regarg_size > 2)
-    moveAXToHL ();
-  else
-    saveScalarAcrossStackAdjustment (first_regarg_size);
+  /* Allocating one or two local bytes uses PUSH and leaves AX intact.  Larger
+     frame adjustments use AX as a temporary, so preserve only the incoming
+     register bytes that they would actually overwrite. */
+  const bool frame_adjustment_clobbers_ax = frame_local_size > 2;
+  if (frame_adjustment_clobbers_ax)
+    {
+      if (first_regarg_size > 2)
+        moveAXToHL ();
+      else
+        saveScalarAcrossStackAdjustment (first_regarg_size);
+    }
 
   if (frame_local_size)
     adjustHardwareStackPointer (-frame_local_size, false);
 
   if (G.stack.saved_de_bytes)
     emit2 ("push", "de");
-  if (first_regarg_size && first_regarg_size <= 2)
-    ensureStackAddress (0, K78K0_CLOBBER_AX, NULL);
-  else
-    clearHLState ();
+  clearHLState ();
 
-  if (first_regarg_size > 2)
-    emit2 ("movw", "ax,hl");
-  else
-    restoreScalarAcrossStackAdjustment (first_regarg_size);
-
-  if (frame_local_size)
+  if (frame_adjustment_clobbers_ax)
     {
       if (first_regarg_size > 2)
-        ensureStackAddress (0, K78K0_PRESERVE_AX, NULL);
+        emit2 ("movw", "ax,hl");
       else
-        ensureStackAddress (0, K78K0_CLOBBER_AX, NULL);
+        restoreScalarAcrossStackAdjustment (first_regarg_size);
     }
 
   if (IFFUNC_ISCRITICAL (type))
@@ -1855,7 +1939,6 @@ genFunction (const iCode *ic)
         saveScalarAcrossStackAdjustment (first_regarg_size);
 
       genCritical ();
-      ensureStackAddress (0, K78K0_CLOBBER_AX, NULL);
 
       if (first_regarg_size > 2)
         emit2 ("movw", "ax,de");
@@ -1876,7 +1959,7 @@ genEndFunction (const iCode *ic)
 
   if (IFFUNC_ISNAKED (type))
     {
-      memset (&G, 0, sizeof G);
+      resetGeneratorState ();
       emit2 (";", "naked function: no epilogue.");
       return;
     }
@@ -1894,7 +1977,7 @@ genEndFunction (const iCode *ic)
                 "78K0 wide return requires a saved DE pair.");
       emitWideRegisterReturnEpilogue (frame_local_size, cleanup_size);
       wassertl (G.stack.pushed == 0, "78K0 unbalanced outgoing stack.");
-      memset (&G, 0, sizeof G);
+      resetGeneratorState ();
       emit2 ("ret", "");
       return;
     }
@@ -1930,7 +2013,7 @@ genEndFunction (const iCode *ic)
     }
 
   wassertl (G.stack.pushed == 0, "78K0 unbalanced outgoing stack.");
-  memset (&G, 0, sizeof G);
+  resetGeneratorState ();
   if (is_isr)
     {
       emit2 ("pop", "hl");
@@ -1957,7 +2040,16 @@ genLabel (const iCode *ic)
   makeICLabel (label, sizeof (label), IC_LABEL (ic));
   emit2 ("", "%s:", label);
   if (!regalloc_dry_run)
-    genLine.lineCurr->isLabel = 1;
+    {
+      stack_label_cache *cache = Safe_alloc (sizeof (*cache));
+
+      genLine.lineCurr->isLabel = 1;
+      memset (cache, 0, sizeof (*cache));
+      SNPRINTF (cache->public_label, sizeof (cache->public_label), "%s", label);
+      cache->next = G.stack_label_caches;
+      G.stack_label_caches = cache;
+      G.pending_stack_label_cache = cache;
+    }
 }
 
 static void
@@ -1966,7 +2058,7 @@ genGoto (const iCode *ic)
   char label[32];
 
   makeICLabel (label, sizeof (label), IC_LABEL (ic));
-  emit2 ("br", "!%s", label);
+  emit2 ("br", "!%s", cachedStackBranchTarget (label));
   clearHLState ();
 }
 
@@ -6080,12 +6172,92 @@ genPointerSet (const iCode *ic)
 }
 
 static bool
+icodeReadsOperand (const iCode *ic, const operand *op)
+{
+  return ic && op &&
+    (sameSymbolOperand (IC_LEFT (ic), op) ||
+     sameSymbolOperand (IC_RIGHT (ic), op) ||
+     (POINTER_SET (ic) && sameSymbolOperand (IC_RESULT (ic), op)));
+}
+
+static bool
+icodeDefinesOperand (const iCode *ic, const operand *op)
+{
+  return ic && op && !POINTER_SET (ic) &&
+    sameSymbolOperand (IC_RESULT (ic), op);
+}
+
+/* DIVUW produces quotient and remainder together.  When a modulo is followed
+   shortly by division of the same nonvolatile temporary by the same literal,
+   save the otherwise-discarded quotient directly into the later spilled
+   result.  Restricting the hidden early definition to stack storage keeps the
+   register allocator's ordinary survivor model exact. */
+static iCode *
+matchFollowingDivision (const iCode *mod)
+{
+  operand *dividend;
+  iCode *division = NULL;
+  bool intermediate_reads_dividend = false;
+  int distance = 0;
+
+  if (regalloc_dry_run || !mod || mod->op != '%' ||
+      !(dividend = IC_LEFT (mod)) || !IS_ITEMP (dividend) ||
+      dividend->isvolatile || !IS_OP_LITERAL (IC_RIGHT (mod)))
+    return NULL;
+
+  for (iCode *candidate = mod->next;
+       candidate && candidate->block == mod->block && distance++ < 8;
+       candidate = candidate->next)
+    {
+      if (candidate->op == '/' &&
+          sameSymbolOperand (IC_LEFT (candidate), dividend) &&
+          IS_OP_LITERAL (IC_RIGHT (candidate)) &&
+          operandLitValueBits (IC_RIGHT (candidate)) ==
+            operandLitValueBits (IC_RIGHT (mod)))
+        {
+          division = candidate;
+          break;
+        }
+
+      if (icodeDefinesOperand (candidate, dividend))
+        return NULL;
+      intermediate_reads_dividend |= icodeReadsOperand (candidate, dividend);
+    }
+
+  if (!division || !IS_ITEMP (IC_RESULT (division)) ||
+      IC_RESULT (division)->isvolatile ||
+      k78k0_operandSize (IC_RESULT (division)) < 1 ||
+      k78k0_operandSize (IC_RESULT (division)) > 2 ||
+      !operandNeedsStackHL (IC_RESULT (division),
+                            k78k0_operandSize (IC_RESULT (division))))
+    return NULL;
+
+  /* Writing x = x / c early is safe only when the original x has no
+     intervening use.  A distinct quotient result likewise must not expose its
+     new value before the source-level division point. */
+  if (sameSymbolOperand (IC_RESULT (division), dividend))
+    {
+      if (intermediate_reads_dividend)
+        return NULL;
+    }
+  else
+    for (const iCode *candidate = mod->next; candidate != division;
+         candidate = candidate->next)
+      if (icodeReadsOperand (candidate, IC_RESULT (division)) ||
+          icodeDefinesOperand (candidate, IC_RESULT (division)))
+        return NULL;
+
+  return division;
+}
+
+static bool
 genDivMod (const iCode *ic)
 {
   operand *result = IC_RESULT (ic);
   operand *left = IC_LEFT (ic);
   operand *right = IC_RIGHT (ic);
   const bool is_mod = ic->op == '%';
+  iCode *following_division;
   int result_size;
 
   if (!IS_ITEMP (result) || !left || !right || !isUnsignedByteDivisor (ic))
@@ -6098,8 +6270,21 @@ genDivMod (const iCode *ic)
   if (getSize (operandType (left)) > 2 || !SPEC_USIGN (getSpec (operandType (left))))
     return false;
 
-  if (operandNeedsStackHL (left, getSize (operandType (left))) || operandNeedsStackHL (right, 1))
-    ensureStackAddress (0, K78K0_CLOBBER_AX, NULL);
+  following_division = is_mod ? matchFollowingDivision (ic) : NULL;
+
+  const bool left_needs_hl =
+    operandNeedsStackHL (left, getSize (operandType (left)));
+  const bool right_needs_hl = operandNeedsStackHL (right, 1);
+
+  /* One register operand can remain in AX while the other is read from the
+     stack.  Building the stack window must not destroy that value before it
+     is copied into DIVUW's AX or C input. */
+  if (left_needs_hl || right_needs_hl)
+    ensureStackAddress (0,
+                        !IS_OP_LITERAL (right) &&
+                        left_needs_hl != right_needs_hl ?
+                          K78K0_PRESERVE_AX : K78K0_CLOBBER_AX,
+                        NULL);
 
   if (IS_OP_LITERAL (right))
     {
@@ -6117,6 +6302,16 @@ genDivMod (const iCode *ic)
     }
 
   emit2 ("divuw", "c");
+
+  if (following_division)
+    {
+      const int quotient_size = k78k0_operandSize (IC_RESULT (following_division));
+
+      if (quotient_size == 1)
+        emit2 ("mov", "a,x");
+      setReturnResult (IC_RESULT (following_division), quotient_size);
+      markGenerated (following_division);
+    }
 
   if (is_mod)
     {
@@ -6784,7 +6979,7 @@ genWideRot (const iCode *ic, const unsigned original_count)
   const int size = k78k0_operandSize (result);
   const unsigned bits = size * 8u;
   unsigned count = original_count % bits;
-  bool rotate_right = count > bits / 2u;
+  bool rotate_right;
 
   if ((size != 2 && size != 4) || k78k0_operandSize (left) != size)
     return false;
@@ -6793,8 +6988,18 @@ genWideRot (const iCode *ic, const unsigned original_count)
   if (!target)
     return true;
   if (!count)
-    return copyOperandToTarget (left, target, size) && finishWideAssignment (ic, result, target);
+    return copyOperandToTarget (left, target, size) &&
+      finishWideAssignment (ic, result, target);
 
+  const bool independent = wideRotateOperandsIndependent (left, target, size);
+
+  /* An independent destination needs one byte copy in either direction.
+     Choose the direction that minimizes the remaining bit rotations, not the
+     total rotation count: e.g. a 32-bit rotate right by seven becomes a
+     three-byte permutation plus one left rotation instead of seven full
+     memory passes.  An overlapping destination retains the shortest overall
+     direction because a byte permutation then needs the temporary path. */
+  rotate_right = independent ? count % 8u > 4u : count > bits / 2u;
   if (rotate_right)
     count = bits - count;
   const unsigned byte_count = count / 8u;
@@ -6803,7 +7008,7 @@ genWideRot (const iCode *ic, const unsigned original_count)
   /* With no whole-byte permutation, the assigned result is already a safe
      work area.  Rotating there avoids a second temporary stack object and a
      redundant copy, just as the wide-shift path does. */
-  if (!byte_count || wideRotateOperandsIndependent (left, target, size))
+  if (!byte_count || independent)
     {
       if (!(byte_count ?
             copyRotatedBytesToTarget (left, target, size, rotate_right,
@@ -7513,7 +7718,7 @@ k78k0DryInstructionCost (iCode *ic)
   genLine.lineHead = NULL;
   genLine.lineCurr = NULL;
   initGenLineElement ();
-  memset (&G, 0, sizeof G);
+  resetGeneratorState ();
   if (currFunc && currFunc->type)
     G.stack.local_size = currFunc->stack > 0 ? currFunc->stack : 0;
   if (ic->op == CALL || ic->op == PCALL)

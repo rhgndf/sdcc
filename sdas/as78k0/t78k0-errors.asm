@@ -14,9 +14,11 @@
 	movw	ax,0x1fe20	; ERROR: out of range signed / unsigned value
 
 	mov	a,<external_address ; ERROR: Byte selection is not valid for a 78K0 direct address
+	mov	a,@0xfe20	; ERROR: Explicit 78K0 SFR operand is outside the SFR ranges
 
 	; A forced addr16 prefix is not part of any 78K0 bit-address grammar.
 	set1	!0xff80.0	; ERROR: Forced addr16 syntax is not valid for a 78K0 bit operand
+	set1	@0xfe20.0	; ERROR: Explicit 78K0 SFR operand is outside the SFR ranges
 	set1	0x1fe20.0	; ERROR: out of range signed / unsigned value
 	set1	0xfe20.0x10000	; ERROR: out of range signed / unsigned value
 

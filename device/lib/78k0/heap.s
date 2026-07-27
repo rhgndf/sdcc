@@ -1,4 +1,30 @@
-; Default 78K0 heap used by the portable allocation routines.
+;--------------------------------------------------------------------------
+;  heap.s
+;
+;  Copyright (C) 2026
+;
+;  This library is free software; you can redistribute it and/or modify it
+;  under the terms of the GNU General Public License as published by the
+;  Free Software Foundation; either version 2, or (at your option) any
+;  later version.
+;
+;  This library is distributed in the hope that it will be useful,
+;  but WITHOUT ANY WARRANTY; without even the implied warranty of
+;  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+;  GNU General Public License for more details.
+;
+;  You should have received a copy of the GNU General Public License
+;  along with this library; see the file COPYING. If not, write to the
+;  Free Software Foundation, 51 Franklin Street, Fifth Floor, Boston,
+;   MA 02110-1301, USA.
+;
+;  As a special exception, if you link this library with other files,
+;  some of which are compiled with SDCC, to produce an executable,
+;  this library does not by itself cause the resulting executable to
+;  be covered by the GNU General Public License. This exception does
+;  not however invalidate any other reasons why the executable file
+;  might be covered by the GNU General Public License.
+;--------------------------------------------------------------------------
 
 	.globl ___sdcc_heap_init
 	.globl ___sdcc_heap
@@ -8,7 +34,13 @@
 	call	!___sdcc_heap_init
 
 	.area DATA
+	; The uPD78F0034's 1 KiB high-speed RAM starts at 0xfb00, but its
+	; top 32 bytes at 0xfee0..0xfeff are the register banks.  Use 512 of
+	; the 992 ordinary RAM bytes for the default heap, leaving the rest
+	; for globals, allocator state, and the downward-growing stack.
+	; Applications that need a different split can replace this object
+	; with their own definitions of the heap boundary symbols.
 ___sdcc_heap::
-	.ds 1023
+	.ds 511
 ___sdcc_heap_end::
 	.ds 1

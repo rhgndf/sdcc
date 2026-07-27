@@ -169,6 +169,69 @@ relt3(void)
 	}
 }
 
+enum
+{
+        K78K0_RELOC_ERROR_SADDR = 15,
+        K78K0_RELOC_ERROR_SFR,
+        K78K0_RELOC_ERROR_ALIGNMENT
+};
+
+static int
+k78k0_direct_mode(int *mode)
+{
+        const int direct_class =
+                *mode & R_78K0_MODE_MASK & ~R_78K0_EVEN;
+        int direct_mode;
+
+        if (!TARGET_IS_78K0 ||
+            (direct_class != R_78K0_SADDR &&
+             direct_class != R_78K0_SFR))
+                return 0;
+
+        direct_mode = *mode & R_78K0_MODE_MASK;
+        *mode &= ~R_78K0_MODE_MASK;
+        return direct_mode;
+}
+
+static int
+k78k0_canonical_addr16(a_uint value, a_uint *address)
+{
+        if (value > 0xFFFF &&
+            (value & (a_uint)0xFFFF8000) != (a_uint)0xFFFF8000)
+                return 0;
+
+        *address = value & 0xFFFF;
+        return 1;
+}
+
+static int
+k78k0_is_saddr(a_uint address)
+{
+        return address >= 0xFE20 && address <= 0xFF1F;
+}
+
+static int
+k78k0_is_sfr(a_uint address)
+{
+        return (address >= 0xFF00 && address <= 0xFFCF) ||
+                (address >= 0xFFE0 && address <= 0xFFFF);
+}
+
+static int
+k78k0_direct_relocation_error(int mode, a_uint value)
+{
+        a_uint address;
+        const int sfr = (mode & ~R_78K0_EVEN) == R_78K0_SFR;
+
+        if (!k78k0_canonical_addr16(value, &address) ||
+            !(sfr ? k78k0_is_sfr(address) : k78k0_is_saddr(address)))
+                return sfr ? K78K0_RELOC_ERROR_SFR :
+                        K78K0_RELOC_ERROR_SADDR;
+        if ((mode & R_78K0_EVEN) && (address & 1))
+                return K78K0_RELOC_ERROR_ALIGNMENT;
+        return 0;
+}
+
 /*)Function	void	relr3(void)
  *
  *	The function relr3() evaluates a R line read by
@@ -275,7 +338,7 @@ relr3(void)
 {
 	int mode;
 	a_uint reli, relv;
-	int aindex, rindex, rtp, error, i;
+	int aindex, rindex, rtp, error, i, k78k0_mode;
         a_uint r, rtbase, rtofst, paga = 0, pags = 0;
 	struct areax **a;
 	struct sym **s;
@@ -353,6 +416,12 @@ relr3(void)
                         mode = ((mode & ~R_ESCAPE_MASK) << 8) | eval();
                         /* printf("unescaping rmode\n"); */
 		}
+
+                /*
+                 * Validation uses the target-specific part of the mode.
+                 * Relocation itself remains an ordinary low-byte operation.
+                 */
+                k78k0_mode = k78k0_direct_mode(&mode);
 
 		rtp = (int) eval();
 		rindex = (int) evword();
@@ -668,6 +737,15 @@ relr3(void)
                         error = 10;
 /* end sdld specific */
 
+                if (k78k0_mode) {
+                        const int direct_error =
+                                k78k0_direct_relocation_error(k78k0_mode,
+                                                             relv);
+
+                        if (direct_error)
+                                error = direct_error;
+		}
+
 		/*
 		 * Error Processing
 		 */
@@ -711,7 +789,10 @@ char *errmsg3[] = {
 /* 11 */        "Invalid address for instruction",
 /* 12 */        "mismatched pdk targets; expected pdk15",
 /* 13 */        "mismatched pdk targets; expected pdk14",
-/* 14 */        "mismatched pdk targets; expected pdk13"
+/* 14 */        "mismatched pdk targets; expected pdk13",
+/* 15 */        "78K0 short-address relocation error",
+/* 16 */        "78K0 SFR relocation error",
+/* 17 */        "78K0 word-address alignment error"
 /* end sdld specific */
 };
 

@@ -466,8 +466,14 @@ k78k0_absoluteValue (struct k78k0_span span, unsigned long *value)
   for (size_t i = 0; i < span.length; i++)
     {
       const unsigned char c = (unsigned char)tolower ((unsigned char)span.text[i]);
-      const unsigned digit = isdigit (c) ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : base;
+      unsigned digit;
 
+      if (isdigit (c))
+        digit = c - '0';
+      else if (c >= 'a' && c <= 'f')
+        digit = c - 'a' + 10;
+      else
+        return false;
       if (digit >= base || result > (ULONG_MAX - digit) / base)
         return false;
       result = result * base + digit;
@@ -485,6 +491,55 @@ k78k0_classifyDirectValue (const unsigned long address, const bool bit)
       (address >= 0xffe0ul && address <= 0xfffful))
     return bit ? K78K0_OPERAND_BIT_SFR : K78K0_OPERAND_SFR;
   return K78K0_OPERAND_NONE;
+}
+
+static bool
+k78k0_classifyBitOperand (const struct k78k0_span operand,
+                          const bool compiler_generated,
+                          enum k78k0_operand_class *classification)
+{
+  struct k78k0_span base;
+  struct k78k0_span suffix;
+  unsigned long address;
+  size_t separator = operand.length;
+  bool explicit_sfr;
+
+  /* ASxxxx permits dots in symbols; the final dot introduces the bit. */
+  while (separator && operand.text[separator - 1] != '.')
+    separator--;
+  if (!separator)
+    return false;
+
+  base.text = operand.text;
+  base.length = separator - 1;
+  suffix.text = operand.text + separator;
+  suffix.length = operand.length - separator;
+  explicit_sfr = base.length && base.text[0] == '@';
+  if (explicit_sfr)
+    base.text++, base.length--;
+
+  *classification = K78K0_OPERAND_NONE;
+  if (!compiler_generated &&
+      (!k78k0_absoluteValue (suffix, &address) || address > 7))
+    return true;
+  if (k78k0_spanEqual (base, "a"))
+    *classification = K78K0_OPERAND_BIT_A;
+  else if (k78k0_spanEqual (base, "psw"))
+    *classification = K78K0_OPERAND_BIT_PSW;
+  else if (k78k0_spanEqual (base, "[hl]"))
+    *classification = K78K0_OPERAND_BIT_HL;
+  else if (k78k0_absoluteValue (base, &address))
+    {
+      const enum k78k0_operand_class direct =
+        k78k0_classifyDirectValue (address, true);
+
+      if (!explicit_sfr || direct == K78K0_OPERAND_BIT_SFR)
+        *classification = direct;
+    }
+  else if (explicit_sfr || compiler_generated)
+    *classification = K78K0_OPERAND_BIT_SFR;
+
+  return true;
 }
 
 static enum k78k0_operand_class
@@ -505,8 +560,7 @@ k78k0_classifyOperand (struct k78k0_span operand, const bool compiler_generated)
     {"sp", K78K0_OPERAND_SP}, {"psw", K78K0_OPERAND_PSW},
     {"[de]", K78K0_OPERAND_DE}, {"[hl]", K78K0_OPERAND_HL}
   };
-  struct k78k0_span base;
-  struct k78k0_span suffix;
+  enum k78k0_operand_class bit_class;
   unsigned long address;
 
   operand = k78k0_trimSpan (operand);
@@ -514,26 +568,8 @@ k78k0_classifyOperand (struct k78k0_span operand, const bool compiler_generated)
     return K78K0_OPERAND_NONE;
   if (k78k0_spanEqual (operand, "cy"))
     return K78K0_OPERAND_BIT_CY;
-  for (size_t i = operand.length; i-- > 0;)
-    if (operand.text[i] == '.')
-      {
-        base.text = operand.text;
-        base.length = i;
-        suffix.text = operand.text + i + 1;
-        suffix.length = operand.length - i - 1;
-        if (!compiler_generated &&
-            (!k78k0_absoluteValue (suffix, &address) || address > 7))
-          return K78K0_OPERAND_NONE;
-        if (k78k0_spanEqual (base, "a"))
-          return K78K0_OPERAND_BIT_A;
-        if (k78k0_spanEqual (base, "psw"))
-          return K78K0_OPERAND_BIT_PSW;
-        if (k78k0_spanEqual (base, "[hl]"))
-          return K78K0_OPERAND_BIT_HL;
-        if (k78k0_absoluteValue (base, &address))
-          return k78k0_classifyDirectValue (address, true);
-        return compiler_generated ? K78K0_OPERAND_BIT_SFR : K78K0_OPERAND_NONE;
-      }
+  if (k78k0_classifyBitOperand (operand, compiler_generated, &bit_class))
+    return bit_class;
   for (size_t i = 0; i < sizeof exact / sizeof *exact; i++)
     if (k78k0_spanEqual (operand, exact[i].text))
       return exact[i].class;
@@ -543,6 +579,9 @@ k78k0_classifyOperand (struct k78k0_span operand, const bool compiler_generated)
   if (operand.text[0] == '!')
     return compiler_generated || operand.length > 1 ?
       K78K0_OPERAND_ADDR16 : K78K0_OPERAND_NONE;
+  if (operand.text[0] == '@')
+    return compiler_generated || operand.length > 1 ?
+      K78K0_OPERAND_SFR : K78K0_OPERAND_NONE;
   if (operand.length >= 4 && !STRNCASECMP (operand.text, "[hl+", 4))
     {
       struct k78k0_span displacement;

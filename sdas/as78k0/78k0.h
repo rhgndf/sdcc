@@ -59,6 +59,12 @@ enum
   S_78K0_XCHW
 };
 
+/* Extended direct-address relocation mode: one class plus optional checks. */
+#define R_78K0_SADDR       0x0800
+#define R_78K0_SFR         0x0A00
+#define R_78K0_EVEN        0x0100
+#define R_78K0_MODE_MASK   0x0F00
+
 extern VOID machine (struct mne *mp);
 extern VOID minit (void);
 

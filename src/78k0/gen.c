@@ -1914,11 +1914,22 @@ absoluteSymbolAddress (const symbol *sym, const int offset, unsigned *address)
 }
 
 static bool
+isSaddrAddress (const unsigned address)
+{
+  return address >= 0xfe20u && address <= 0xff1fu;
+}
+
+static bool
+isSfrAddress (const unsigned address)
+{
+  return (address >= 0xff00u && address <= 0xffcfu) ||
+    (address >= 0xffe0u && address <= 0xffffu);
+}
+
+static bool
 isOneByteDirectAddress (const unsigned address)
 {
-  return (address >= 0xfe20u && address <= 0xff1fu) ||
-    (address >= 0xff00u && address <= 0xffcfu) ||
-    (address >= 0xffe0u && address <= 0xffffu);
+  return isSaddrAddress (address) || isSfrAddress (address);
 }
 
 typedef enum
@@ -1935,18 +1946,20 @@ formatByteAddress (char *address, const size_t size, const symbol *sym, const in
   unsigned absolute_address;
   if (absoluteSymbolAddress (sym, offset, &absolute_address))
     {
-      const bool short_address = access == K78K0_DIRECT_MOV ?
+      const bool one_byte_address = access == K78K0_DIRECT_MOV ?
         isOneByteDirectAddress (absolute_address) :
-        absolute_address >= 0xfe20u && absolute_address <= 0xff1fu;
+        isSaddrAddress (absolute_address);
 
       SNPRINTF (address, size, "%s0x%04x",
-                short_address ? "" : "!", absolute_address);
+                one_byte_address ? "" : "!", absolute_address);
       return;
     }
 
-  /* Arithmetic instructions have an saddr form, but no general SFR form. */
+  /* Arithmetic instructions have an saddr form, but no general SFR form.
+     '@' preserves the SFR address class until an external symbol is resolved
+     by the linker; '!' selects the general addr16 form. */
   const char *prefix = access == K78K0_DIRECT_MOV && sym->etype &&
-    SPEC_SCLS (sym->etype) == S_SFR ? "" : "!";
+    SPEC_SCLS (sym->etype) == S_SFR ? "@" : "!";
 
   if (offset)
     SNPRINTF (address, size, "%s%s + %d", prefix, sym->rname, offset);
@@ -3559,7 +3572,7 @@ genInPlaceIncDec (const iCode *ic, const bool subtract)
       char formatted[SDCC_NAME_MAX + 32];
 
       if (!aopAbsoluteDirectAddress (&destination, 0, 1, &address) ||
-          address < 0xfe20u || address > 0xff1fu)
+          !isSaddrAddress (address))
         return false;
       formatByteAddress (formatted, sizeof (formatted), destination.storage, 0,
                          K78K0_DIRECT_ALU);

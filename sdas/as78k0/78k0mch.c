@@ -114,7 +114,8 @@ enum
   K78K0_MEM_HL,
   K78K0_MEM_HL_INDEX,
   K78K0_MEM_HL_B,
-  K78K0_MEM_HL_C
+  K78K0_MEM_HL_C,
+  K78K0_MEM_COUNT
 };
 
 enum k78k0_operand_kind
@@ -156,11 +157,17 @@ addr16expr (struct expr *e)
   expr (e, 0);
 }
 
-enum
+enum k78k0_direct_class
 {
   K78K0_DIR_SADDR,
   K78K0_DIR_SFR,
-  K78K0_DIR_ADDR16
+  K78K0_DIR_ADDR16,
+  K78K0_DIR_INFER
+};
+
+enum
+{
+  K78K0_DIRECT_CLASS_COUNT = K78K0_DIR_ADDR16 + 1
 };
 
 static int
@@ -195,26 +202,42 @@ address_error (const char *message)
   xerr ('q', (char *)message);
 }
 
-static int
-direct_class (struct expr *e, int forced_addr16)
+static enum k78k0_direct_class
+classify_direct (struct expr *e,
+                 const enum k78k0_direct_class requested_class)
 {
-  a_uint addr = 0;
+  a_uint addr;
 
-  if (forced_addr16)
-    {
-      if (is_abs (e) && !canonical_addr16 (e->e_addr, &addr))
-        address_error ("78K0 addr16 operand is outside 0x0000..0xffff.");
-      return K78K0_DIR_ADDR16;
-    }
+  if (requested_class != K78K0_DIR_ADDR16 && e->e_rlcf)
+    address_error ("Byte selection is not valid for a 78K0 direct address.");
+
   if (!is_abs (e))
-    {
-      if (e->e_rlcf)
-        address_error ("Byte selection is not valid for a 78K0 direct address.");
-      return K78K0_DIR_SADDR;
-    }
+    return requested_class == K78K0_DIR_INFER ?
+      K78K0_DIR_SADDR : requested_class;
 
   if (!canonical_addr16 (e->e_addr, &addr))
-    address_error ("78K0 direct address is outside the 16-bit address space.");
+    {
+      if (requested_class == K78K0_DIR_ADDR16)
+        address_error ("78K0 addr16 operand is outside 0x0000..0xffff.");
+      else if (requested_class == K78K0_DIR_SFR)
+        address_error ("Explicit 78K0 SFR operand is outside the SFR ranges.");
+      else
+        address_error ("78K0 direct address is outside the 16-bit address space.");
+
+      return requested_class == K78K0_DIR_INFER ?
+        K78K0_DIR_SADDR : requested_class;
+    }
+
+  if (requested_class == K78K0_DIR_ADDR16)
+    return K78K0_DIR_ADDR16;
+
+  if (requested_class == K78K0_DIR_SFR)
+    {
+      if (!is_sfr_value (addr))
+        address_error ("Explicit 78K0 SFR operand is outside the SFR ranges.");
+      return K78K0_DIR_SFR;
+    }
+
   if (is_saddr_value (addr))
     return K78K0_DIR_SADDR;
   if (is_sfr_value (addr))
@@ -245,29 +268,37 @@ emit_u8 (struct expr *value)
 }
 
 static void
-emit_direct_address (struct expr *addr, int kind, int even)
+emit_direct_address (struct expr *addr,
+                     const enum k78k0_direct_class direct_class, int even)
 {
   a_uint canonical;
 
   if (even && is_abs (addr) && (addr->e_addr & 1))
     address_error ("78K0 word address must be even.");
 
-  if (kind == K78K0_DIR_ADDR16)
+  if (direct_class == K78K0_DIR_ADDR16)
     {
       if (is_abs (addr) && !canonical_addr16 (addr->e_addr, &canonical))
         address_error ("78K0 addr16 operand is outside 0x0000..0xffff.");
       outrw (addr, R_NORM);
     }
   else
-    outrb (addr, R_NORM);
+    {
+      const int relocation =
+        (direct_class == K78K0_DIR_SADDR ? R_78K0_SADDR : R_78K0_SFR) |
+        (even ? R_78K0_EVEN : 0);
+
+      outrb (addr, relocation);
+    }
 }
 
 static void
-emit_direct_opcode (struct expr *addr, int kind, int even,
+emit_direct_opcode (struct expr *addr,
+                    const enum k78k0_direct_class direct_class, int even,
                     int addr16_opcode, int saddr_opcode, int sfr_opcode)
 {
-  const int opcode = kind == K78K0_DIR_ADDR16 ? addr16_opcode :
-    kind == K78K0_DIR_SADDR ? saddr_opcode : sfr_opcode;
+  const int opcode = direct_class == K78K0_DIR_ADDR16 ? addr16_opcode :
+    direct_class == K78K0_DIR_SADDR ? saddr_opcode : sfr_opcode;
 
   if (opcode < 0)
     {
@@ -276,7 +307,7 @@ emit_direct_opcode (struct expr *addr, int kind, int even,
     }
 
   outab (opcode);
-  emit_direct_address (addr, kind, even);
+  emit_direct_address (addr, direct_class, even);
 }
 
 static void
@@ -320,7 +351,7 @@ bit_number (void)
 static int
 bit_number_from_suffix (char *name)
 {
-  char *suffix = strchr (name, '.');
+  char *suffix = strrchr (name, '.');
 
   if (!suffix)
     return -1;
@@ -332,6 +363,41 @@ bit_number_from_suffix (char *name)
       return 0;
     }
   return suffix[0] - '0';
+}
+
+static void
+parse_direct_bit_expression (struct expr *value, int *bit)
+{
+  char *const start = ip;
+  char *end = start;
+  char *suffix = NULL;
+  char saved;
+
+  while (*end && *end != ',' && *end != ';')
+    {
+      if (*end == '.')
+        suffix = end;
+      end++;
+    }
+
+  if (!suffix)
+    {
+      qerr ();
+      expr (value, 0);
+      *bit = 0;
+      return;
+    }
+
+  /* A dot is a legal ASxxxx symbol character.  Temporarily terminate the
+   * direct-address expression at the final dot so symbolic bit operands
+   * retain both their relocation and their separate bit number. */
+  saved = *suffix;
+  *suffix = '\0';
+  ip = start;
+  expr (value, 0);
+  *suffix = saved;
+  ip = suffix;
+  *bit = bit_number ();
 }
 
 static int
@@ -379,6 +445,7 @@ static struct k78k0_operand
 parse_operand (int bit_operand)
 {
   struct k78k0_operand operand = { K78K0_OPERAND_INVALID, -1, -1 };
+  enum k78k0_direct_class requested_class = K78K0_DIR_INFER;
   char id[NCPS];
   char *p = ip;
   int c = getnb ();
@@ -445,17 +512,22 @@ parse_operand (int bit_operand)
         }
     }
 
-  if (bit_operand && c == '!')
+  if (c == '!')
+    requested_class = K78K0_DIR_ADDR16;
+  else if (c == '@')
+    requested_class = K78K0_DIR_SFR;
+  else
+    ip = p;
+
+  if (bit_operand && requested_class == K78K0_DIR_ADDR16)
     address_error ("Forced addr16 syntax is not valid for a 78K0 bit operand.");
 
-  const int forced_addr16 = c == '!';
-  if (!forced_addr16)
-    ip = p;
   operand.kind = K78K0_OPERAND_DIRECT;
-  expr (&operand.value, 0);
-  operand.mode = direct_class (&operand.value, forced_addr16);
   if (bit_operand)
-    operand.bit = bit_number ();
+    parse_direct_bit_expression (&operand.value, &operand.bit);
+  else
+    expr (&operand.value, 0);
+  operand.mode = classify_direct (&operand.value, requested_class);
   return operand;
 }
 
@@ -464,7 +536,7 @@ emit_memory_opcode (struct k78k0_operand *operand, const int opcodes[])
 {
   const int kind = operand->mode;
 
-  if (kind < K78K0_MEM_DE || kind > K78K0_MEM_HL_C || opcodes[kind] < 0)
+  if (kind < K78K0_MEM_DE || kind >= K78K0_MEM_COUNT || opcodes[kind] < 0)
     {
       qerr ();
       return;
@@ -480,8 +552,8 @@ static const int mov_a_to_memory[] = { 0x95, 0x97, 0xbe, 0xbb, 0xba };
 struct accumulator_source_encoding
 {
   int immediate, reg, psw;
-  int direct[3];
-  int memory[5];
+  int direct[K78K0_DIRECT_CLASS_COUNT];
+  int memory[K78K0_MEM_COUNT];
 };
 
 static const struct accumulator_source_encoding mov_a_source = {
@@ -574,7 +646,7 @@ struct bit_encoding
 
 /* Indexed by k78k0_bit_class.  The two-element fields select ordinary bit
  * operations or operations that use CY. */
-static const struct bit_encoding bit_encodings[] = {
+static const struct bit_encoding bit_encodings[K78K0_BIT_INVALID] = {
   [K78K0_BIT_CY]    = { { -1, -1 },    0, { 0, 0 },  -1 },
   [K78K0_BIT_SADDR] = { { -1, 0x71 },  0, { 0, 0 },   0 },
   [K78K0_BIT_SFR]   = { { 0x71, 0x71 }, 0, { 0, 8 },   4 },

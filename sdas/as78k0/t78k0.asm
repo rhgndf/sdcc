@@ -36,6 +36,7 @@
 	mov	a,0xffcf	; EXPECT: F4 CF
 	mov	a,0xffe0	; EXPECT: F4 E0
 	mov	a,0xffff	; EXPECT: F4 FF
+	mov	a,@0xff00	; EXPECT: F4 00
 
 	xch	a,b	; EXPECT: 33
 	xch	a,0xfe20	; EXPECT: 83 20
@@ -74,6 +75,7 @@
 	movw	ax,0xff20	; EXPECT: A9 20
 	movw	ax,0xffce	; EXPECT: A9 CE
 	movw	ax,0xfffe	; EXPECT: A9 FE
+	movw	ax,@0xff00	; EXPECT: A9 00
 
 	; 8-bit arithmetic and logical operations
 	mov	a,#0x56	; EXPECT: A1 56
@@ -214,6 +216,7 @@
 	xor1	cy,[hl].5	; EXPECT: 71 D7
 	set1	0xfe20.1	; EXPECT: 1A 20
 	set1	0xff80.2	; EXPECT: 71 2A 80
+	set1	@0xff00.0	; EXPECT: 71 0A 00
 	set1	a.3	; EXPECT: 61 BA
 	set1	psw.4	; EXPECT: 4A 1E
 	set1	[hl].5	; EXPECT: 71 D2

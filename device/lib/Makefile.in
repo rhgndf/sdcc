@@ -89,6 +89,7 @@ OPT_DISABLE_MOS6502  = @OPT_DISABLE_MOS6502@
 OPT_DISABLE_MOS65C02 = @OPT_DISABLE_MOS65C02@
 OPT_DISABLE_F8       = @OPT_DISABLE_F8@
 OPT_DISABLE_F8L      = @OPT_DISABLE_F8L@
+OPT_DISABLE_78K0     = @OPT_DISABLE_78K0@
 
 SOURCES_FLOAT = $(COMMON_FLOAT) \
   _fscmp.c \
@@ -125,6 +126,7 @@ SOURCES_LONGLONG = $(COMMON_LONGLONG) \
 SOURCES_SDCC = $(COMMON_SDCC) \
   _autobaud.c \
   _bp.c \
+  _bpx.c \
   _decdptr.c \
   _gptrget.c \
   _gptrgetc.c \
@@ -154,7 +156,7 @@ SOURCES_SDCC = $(COMMON_SDCC) \
   printf_fast_f.c \
   printf_tiny.c \
   printfl.c \
-  bpx.c
+
 
 SOURCES = $(SOURCES_FLOAT) $(SOURCES_INT) $(SOURCES_LONG) $(SOURCES_LONGLONG) $(SOURCES_SDCC)
 
@@ -311,6 +313,10 @@ endif
 
 ifeq ($(OPT_DISABLE_F8L), 0)
 TARGETS        += model-f8l
+endif
+
+ifeq ($(OPT_DISABLE_78K0), 0)
+TARGETS        += model-78k0
 endif
 
 # Compiling entire program or any subproject
@@ -577,6 +583,16 @@ model-f8l:
 	fi
 
 objects-f8l:
+	$(MAKE) build-dir
+	$(MAKE) port-specific-objects
+	$(MAKE) clean_intermediate
+
+model-78k0:
+	if grep '^78k0$$' $(top_builddir)/ports.build > /dev/null; then \
+	  $(MAKE) MODELFLAGS="-m78k0" PORT=78k0 objects-78k0 || exit 1; \
+	fi
+
+objects-78k0:
 	$(MAKE) build-dir
 	$(MAKE) port-specific-objects
 	$(MAKE) clean_intermediate

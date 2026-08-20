@@ -77,6 +77,7 @@ sdld_init (char *path)
     { "stm8", TARGET_ID_STM8, },
     { "pdk",  TARGET_ID_PDK,  },
     { "f8",   TARGET_ID_F8,   },
+    { "78k0", TARGET_ID_78K0, },
   };
   int i = NELEM (tgt);
 

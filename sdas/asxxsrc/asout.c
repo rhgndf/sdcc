@@ -513,7 +513,7 @@ outrxb(int i, struct expr *esp, int r)
 					out_lb(lobyte(esp->e_addr),r|R_RELOC);
 				}
                                 if (oflag) {
-                                        outchk(a_bytes, 4);
+                                        outchk(a_bytes, 5);
                                         out_txb(a_bytes, esp->e_addr);
                                         if (esp->e_flag) {
                                                 n = esp->e_base.e_sp->s_ref;
@@ -521,8 +521,7 @@ outrxb(int i, struct expr *esp, int r)
                                         } else {
                                                 n = esp->e_base.e_ap->a_ref;
 					}
-                                        *relp++ = r;
-                                        *relp++ = txtp - txt - a_bytes;
+                                        write_rmode(r, txtp - txt - a_bytes);
                                         out_rw(n);
 				}
 			} else {

@@ -1,7 +1,7 @@
-/*-------------------------------------------------------------------------
-;  atomic_flag_test_and_set.c - C run-time: C11 atomic flag
+;--------------------------------------------------------------------------
+;  heap.s
 ;
-;  Copyright (c) 2024, Philipp Klaus Krause
+;  Copyright (C) 2026
 ;
 ;  This library is free software; you can redistribute it and/or modify it
 ;  under the terms of the GNU General Public License as published by the
@@ -24,21 +24,23 @@
 ;  be covered by the GNU General Public License. This exception does
 ;  not however invalidate any other reasons why the executable file
 ;  might be covered by the GNU General Public License.
-;------------------------------------------------------------------------*/
+;--------------------------------------------------------------------------
 
-#ifdef __SDCC_MODEL_FLAT24
+	.globl ___sdcc_heap_init
+	.globl ___sdcc_heap
+	.globl ___sdcc_heap_end
 
-static void dummy(void) __naked
-{
-	__asm
-	.area HOME    (CODE)
+	.area GSINIT
+	call	!___sdcc_heap_init
 
-_atomic_flag_test_and_set::
-	mov  r2, #1
-	ljmp sdcc_atomic_exchange_gptr_impl
-
-	__endasm;
-}
-
-#endif
-
+	.area DATA
+	; The uPD78F0034's 1 KiB high-speed RAM starts at 0xfb00, but its
+	; top 32 bytes at 0xfee0..0xfeff are the register banks.  Use 512 of
+	; the 992 ordinary RAM bytes for the default heap, leaving the rest
+	; for globals, allocator state, and the downward-growing stack.
+	; Applications that need a different split can replace this object
+	; with their own definitions of the heap boundary symbols.
+___sdcc_heap::
+	.ds 511
+___sdcc_heap_end::
+	.ds 1

@@ -1,0 +1,421 @@
+// AND, OR and XOR already set Z from their result.
+
+replace restart {
+	%1	a,%2
+	cmp	a,#0x00
+	%3	%4
+} by {
+	%1	a,%2
+	%3	%4
+} if same(%1 'and' 'or' 'xor'), same(%3 'bz' 'bnz')
+
+// INC and DEC already set Z, while MOV preserves it.  Reuse that flag when
+// the result is tested immediately instead of comparing the value with zero.
+
+replace restart {
+	%1	%2
+	mov	a,%2
+	cmp	a,#0x00
+	%3	%4
+} by {
+	%1	%2
+	mov	a,%2
+	%3	%4
+} if same(%1 'inc' 'dec'), same(%3 'bz' 'bnz')
+
+replace restart {
+	%1	a
+	cmp	a,#0x00
+	%2	%3
+} by {
+	%1	a
+	%2	%3
+} if same(%1 'inc' 'dec'), same(%2 'bz' 'bnz')
+
+// The indexed [HL+byte] form is one byte longer than the native [HL] form.
+
+replace restart {
+	%1	a,[hl+0x00]
+} by {
+	%1	a,[hl]
+} if same(%1 'mov' 'add' 'addc' 'sub' 'subc' 'and' 'or' 'xor' 'cmp' 'xch')
+
+replace restart {
+	mov	[hl+0x00],a
+} by {
+	mov	[hl],a
+}
+
+// A load followed by a store to the same nonvolatile location leaves memory
+// unchanged.
+
+replace restart {
+	mov	a,[hl%1
+	mov	[hl%1,a
+} by {
+	mov	a,[hl%1
+} if notVolatile
+
+// Remove the second half of register round-trips. MOV and MOVW do not alter flags.
+
+replace {
+	mov	%1,%2
+	mov	%2,%1
+} by {
+	mov	%1,%2
+} if same(%1 'a' 'x' 'b' 'c' 'd' 'e' 'l' 'h'), same(%2 'a' 'x' 'b' 'c' 'd' 'e' 'l' 'h'), notSame(%1 %2)
+
+// Copying A to registers does not change A.  Avoid reconstructing the same
+// value from the first copy immediately afterward.
+
+replace restart {
+	mov	%1,a
+	mov	%2,a
+	mov	a,%1
+} by {
+	mov	%1,a
+	mov	%2,a
+} if same(%1 'x' 'b' 'c' 'd' 'e' 'l' 'h'), same(%2 'x' 'b' 'c' 'd' 'e' 'l' 'h')
+
+// CMP and a conditional branch preserve A.  A register copy made before the
+// comparison therefore need not be reloaded on the fall-through path.
+
+replace restart {
+	mov	%1,a
+	cmp	a,%2
+	%3	%4
+	mov	a,%1
+} by {
+	mov	%1,a
+	cmp	a,%2
+	%3	%4
+} if same(%1 'x' 'b' 'c' 'd' 'e' 'l' 'h'), same(%3 'bz' 'bnz' 'bc' 'bnc')
+
+// MOV does not affect flags.  Once all reads of its register destination
+// have disappeared, discard the copy while retaining volatile source reads.
+
+replace restart {
+	mov	%1,%2
+} by {
+} if same(%1 'a' 'x' 'b' 'c' 'd' 'e' 'l' 'h'), notUsed(%1), notVolatile(%2)
+
+replace restart {
+	movw	%1,%2
+} by {
+} if same(%1 'ax' 'bc' 'de' 'hl'), notUsed(%1), notVolatile(%2)
+
+// Preserving AX while reconstructing HL from SP costs an extra pair move and
+// exchange.  A following stack-byte load overwrites A; if the old X byte is
+// dead as well, construct the stack address directly.
+
+replace restart {
+	movw	hl,ax
+	movw	ax,sp
+	xchw	ax,hl
+	mov	a,[hl%1
+} by {
+	movw	ax,sp
+	movw	hl,ax
+	mov	a,[hl%1
+} if notUsed('x')
+
+replace {
+	movw	%1,%2
+	movw	%2,%1
+} by {
+	movw	%1,%2
+} if same(%1 'ax' 'bc' 'de' 'hl' 'sp'), same(%2 'ax' 'bc' 'de' 'hl' 'sp'), notSame(%1 %2)
+
+// MOVW copies the high byte to both A and D in either direction.
+
+replace restart {
+	movw	%1,%2
+	mov	a,d
+} by {
+	movw	%1,%2
+} if same(%1 'ax' 'de'), same(%2 'ax' 'de'), notSame(%1 %2)
+
+replace restart {
+	xch	a,%1
+	xch	a,%1
+} by {
+} if same(%1 'x' 'b' 'c' 'd' 'e' 'l' 'h')
+
+// INC and DEC accept every byte register and MOV preserves their flags.
+
+replace restart {
+	mov	a,%1
+	%2	a
+	mov	%1,a
+} by {
+	%2	%1
+	mov	a,%1
+} if same(%1 'x' 'b' 'c' 'd' 'e' 'l' 'h'), same(%2 'inc' 'dec')
+
+// MOV and MOVW do not alter flags, so repeated safe loads have no observable
+// effect. Keep memory operands behind the volatility check.
+
+replace restart {
+	mov	%1,%2
+	mov	%1,%2
+} by {
+	mov	%1,%2
+} if same(%1 'a' 'x' 'b' 'c' 'd' 'e' 'l' 'h'), same(%2 'a' 'x' 'b' 'c' 'd' 'e' 'l' 'h')
+
+replace restart {
+	mov	a,%1
+	mov	a,%1
+} by {
+	mov	a,%1
+} if notVolatile
+
+replace restart {
+	mov	%1,#%2
+	mov	%1,#%2
+} by {
+	mov	%1,#%2
+} if same(%1 'a' 'x' 'b' 'c' 'd' 'e' 'l' 'h')
+
+replace restart {
+	movw	%1,%2
+	movw	%1,%2
+} by {
+	movw	%1,%2
+} if same(%1 'ax' 'bc' 'de' 'hl' 'sp'), same(%2 'ax' 'bc' 'de' 'hl' 'sp')
+
+replace restart {
+	movw	%1,#%2
+	movw	%1,#%2
+} by {
+	movw	%1,#%2
+} if same(%1 'ax' 'bc' 'de' 'hl' 'sp')
+
+// PUSH preserves AX, so the same literal need not be reconstructed afterward.
+
+replace restart {
+	movw	ax,#%1
+	push	ax
+	movw	ax,#%1
+} by {
+	movw	ax,#%1
+	push	ax
+}
+
+// Discard a side-effect-free AX load when the next instruction replaces AX.
+// Do not match memory sources, since they may be volatile.
+
+replace restart {
+	movw	ax,%1
+	movw	ax,%2
+} by {
+	movw	ax,%2
+} if same(%1 'bc' 'de' 'hl' 'sp')
+
+replace restart {
+	movw	ax,#%1
+	movw	ax,%2
+} by {
+	movw	ax,%2
+}
+
+replace restart {
+	movw	ax,%1
+	movw	ax,#%2
+} by {
+	movw	ax,#%2
+} if same(%1 'bc' 'de' 'hl' 'sp')
+
+replace restart {
+	movw	ax,#%1
+	movw	ax,#%2
+} by {
+	movw	ax,#%2
+}
+
+replace restart {
+	movw	ax,%1
+	movw	ax,#%2 + %3
+} by {
+	movw	ax,#%2 + %3
+} if same(%1 'bc' 'de' 'hl' 'sp')
+
+replace restart {
+	movw	ax,#%1
+	movw	ax,#%2 + %3
+} by {
+	movw	ax,#%2 + %3
+}
+
+replace restart {
+	movw	ax,#%1 + %2
+	movw	ax,#%3
+} by {
+	movw	ax,#%3
+}
+
+replace restart {
+	movw	ax,#%1 + %2
+	movw	ax,#%3 + %4
+} by {
+	movw	ax,#%3 + %4
+}
+
+// Conditional branches have only an 8-bit displacement. Code generation uses
+// an inverse branch around an absolute BR; collapse it when the target is near.
+
+replace restart {
+	bz	%1
+	br	!%2
+%1:
+} by {
+	bnz	%2
+%1:
+} if labelInRange(%2), labelRefCountChange(%1 -1)
+
+replace restart {
+	bnz	%1
+	br	!%2
+%1:
+} by {
+	bz	%2
+%1:
+} if labelInRange(%2), labelRefCountChange(%1 -1)
+
+replace restart {
+	bc	%1
+	br	!%2
+%1:
+} by {
+	bnc	%2
+%1:
+} if labelInRange(%2), labelRefCountChange(%1 -1)
+
+replace restart {
+	bnc	%1
+	br	!%2
+%1:
+} by {
+	bc	%2
+%1:
+} if labelInRange(%2), labelRefCountChange(%1 -1)
+
+replace restart {
+	bf	a.%1,%2
+	br	!%3
+%2:
+} by {
+	bt	a.%1,%3
+%2:
+} if labelInRange(%3), labelRefCountChange(%2 -1)
+
+replace restart {
+	bt	a.%1,%2
+	br	!%3
+%2:
+} by {
+	bf	a.%1,%3
+%2:
+} if labelInRange(%3), labelRefCountChange(%2 -1)
+
+// Keep the same transformation available after a long BR has been relaxed.
+
+replace restart {
+	bz	%1
+	br	%2
+%1:
+} by {
+	bnz	%2
+%1:
+} if labelInRange(%2), labelRefCountChange(%1 -1)
+
+replace restart {
+	bnz	%1
+	br	%2
+%1:
+} by {
+	bz	%2
+%1:
+} if labelInRange(%2), labelRefCountChange(%1 -1)
+
+replace restart {
+	bc	%1
+	br	%2
+%1:
+} by {
+	bnc	%2
+%1:
+} if labelInRange(%2), labelRefCountChange(%1 -1)
+
+replace restart {
+	bnc	%1
+	br	%2
+%1:
+} by {
+	bc	%2
+%1:
+} if labelInRange(%2), labelRefCountChange(%1 -1)
+
+replace restart {
+	bf	a.%1,%2
+	br	%3
+%2:
+} by {
+	bt	a.%1,%3
+%2:
+} if labelInRange(%3), labelRefCountChange(%2 -1)
+
+replace restart {
+	bt	a.%1,%2
+	br	%3
+%2:
+} by {
+	bf	a.%1,%3
+%2:
+} if labelInRange(%3), labelRefCountChange(%2 -1)
+
+replace restart {
+	br	!%1
+} by {
+	br	%1
+} if labelInRange(%1)
+
+// A branch to the immediately following label has no effect. The absolute
+// form needs a separate rule because '!' is part of its operand syntax.
+
+replace restart {
+	br	!%1
+%1:
+} by {
+%1:
+} if labelRefCountChange(%1 -1)
+
+replace restart {
+	%1	%2
+%2:
+} by {
+%2:
+} if same(%1 'br' 'bc' 'bnc' 'bz' 'bnz'), labelRefCountChange(%2 -1)
+
+// Removing an unused label can expose another branch inversion rule.
+
+replace restart {
+%1:
+} by {
+} if labelRefCount(%1 0)
+
+// Do this after branch inversion so a conditional diamond is simplified
+// before its unconditional branch is replaced by the target's return.
+
+barrier
+
+replace restart {
+	br	!%1
+} by {
+	ret
+} if labelIsReturnOnly(%1), labelRefCountChange(%1 -1)
+
+replace restart {
+	br	%1
+} by {
+	ret
+} if labelIsReturnOnly(%1), labelRefCountChange(%1 -1)

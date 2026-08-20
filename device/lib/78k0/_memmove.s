@@ -1,8 +1,7 @@
 ;--------------------------------------------------------------------------
-;  __sdcc_atomic_maybe_rollback - C run-time: rollback for restartable
-;  sequence implementation of C11 atomics
+;  _memmove.s
 ;
-;  Copyright (C) 2024, Philipp Klaus Krause
+;  Copyright (C) 2026
 ;
 ;  This library is free software; you can redistribute it and/or modify it
 ;  under the terms of the GNU General Public License as published by the
@@ -17,7 +16,7 @@
 ;  You should have received a copy of the GNU General Public License
 ;  along with this library; see the file COPYING. If not, write to the
 ;  Free Software Foundation, 51 Franklin Street, Fifth Floor, Boston,
-;   MA 02110-1301, USA.
+;  MA 02110-1301, USA.
 ;
 ;  As a special exception, if you link this library with other files,
 ;  some of which are compiled with SDCC, to produce an executable,
@@ -27,52 +26,97 @@
 ;  might be covered by the GNU General Public License.
 ;--------------------------------------------------------------------------
 
-	.area HOME    (CODE)
-	.area GSINIT0 (CODE)
-	.area GSINIT1 (CODE)
-	.area GSINIT2 (CODE)
-	.area GSINIT3 (CODE)
-	.area GSINIT4 (CODE)
-	.area GSINIT5 (CODE)
-	.area GSINIT  (CODE)
-	.area GSFINAL (CODE)
-	.area CSEG    (CODE)
+	.globl _memmove
 
-	.area HOME    (CODE)
+	.area CODE
 
-; This relies on the restartable implementations being aligned properly.
+_memmove:
+	push	de
+	push	ax
+	movw	hl,ax
 
-sdcc_atomic_maybe_rollback::
-	push acc
-	xch  a,r0
-	mov  r0, SP
-	dec  r0
-	push psw
-	cjne @r0, #>sdcc_atomic_exchange_rollback_start, 4$
-	dec  r0
-	cjne @r0, #<sdcc_atomic_exchange_rollback_start, 0$
-0$:
-	jc   4$
-	cjne @r0, #<sdcc_atomic_exchange_rollback_end, 1$
-1$:
-	jnc  4$
-	; we now know the interrupted routine was somewhere among the
-	; restartable implementations of atomic functions.
-	push acc
-	mov  a, @r0
-	anl  a, #0x07
-	cjne a, #6, 2$
-2$:
-	jnc  3$
-	; we actually need to restart.
-	mov  a, @r0
-	anl  a, #0xf8
-	mov  @r0, a
-3$:	; inner skip
-	pop  acc
-4$:	; outer skip
-	pop  psw
-	xch  a,r0
-	pop  acc
-	reti
+	; Load the 16-bit length into BC.
+	movw	ax,sp
+	addw	ax,#0x0008
+	movw	de,ax
+	mov	a,[de]
+	mov	x,a
+	incw	de
+	mov	a,[de]
+	movw	bc,ax
+	or	a,c
+	bz	00006$
 
+	; Load the source pointer into DE.
+	movw	ax,sp
+	addw	ax,#0x0006
+	movw	de,ax
+	mov	a,[de]
+	mov	x,a
+	incw	de
+	mov	a,[de]
+	movw	de,ax
+
+	; Copy backwards exactly when src < dst; either direction is safe
+	; for non-overlapping ranges.
+	mov	a,d
+	cmp	a,h
+	bc	00003$
+	bnz	00001$
+	mov	a,e
+	cmp	a,l
+	bc	00003$
+	bz	00006$
+
+00001$:
+	; Convert BC into nested DBNZ counters: B is the number of 256-byte
+	; blocks, rounded up when the low-byte remainder is nonzero.
+	mov	a,c
+	cmp	a,#0x00
+	bz	00002$
+	inc	b
+00002$:
+	mov	a,[de]
+	mov	[hl],a
+	incw	de
+	incw	hl
+	dbnz	c,00002$
+	dbnz	b,00002$
+	br	00006$
+
+00003$:
+	; Point HL and DE one byte past their ranges using the original count.
+	mov	a,l
+	add	a,c
+	mov	l,a
+	mov	a,h
+	addc	a,b
+	mov	h,a
+	mov	a,e
+	add	a,c
+	mov	e,a
+	mov	a,d
+	addc	a,b
+	mov	d,a
+
+	mov	a,c
+	cmp	a,#0x00
+	bz	00004$
+	inc	b
+00004$:
+	decw	de
+	decw	hl
+	mov	a,[de]
+	mov	[hl],a
+	dbnz	c,00004$
+	dbnz	b,00004$
+
+00006$:
+	pop	bc
+	pop	de
+	pop	hl
+	pop	ax
+	pop	ax
+	push	hl
+	movw	ax,bc
+	ret

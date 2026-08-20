@@ -55,6 +55,8 @@
 typedef unsigned char jmp_buf[6]; /* 2 for the stack pointer, 2 for the return address, 2 for the frame pointer. */
 #elif defined (__SDCC_ds390) || defined (__SDCC_stm8) && defined (__SDCC_MODEL_LARGE)
 typedef unsigned char jmp_buf[5]; /* 2 for the stack pointer, 3 for the return address. */
+#elif defined (__SDCC_78k0)
+typedef unsigned char jmp_buf[6]; /* 2 for the return address, 2 for the stack pointer, 2 for DE. */
 #elif defined (__SDCC_stm8) || defined (__SDCC_sm83) || defined (__SDCC_hc08) || defined (__SDCC_s08) || defined (__SDCC_f8) || defined (__SDCC_f8l)
 typedef unsigned char jmp_buf[4]; /* 2 for the stack pointer, 2 for the return address. */
 #elif defined (__SDCC_pdk13) || defined (__SDCC_pdk14) || defined (__SDCC_pdk15) || defined(__SDCC_mos6502) || defined(__SDCC_mos65c02)
@@ -93,4 +95,3 @@ _Noreturn void longjmp(jmp_buf, int);
 #undef BPX_SIZE
 
 #endif
-

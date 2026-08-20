@@ -749,6 +749,7 @@ AC_DO_PORT(mos6502,  mos6502,MOS6502,  [Excludes the MOS6502 port])
 AC_DO_PORT(mos65c02, mos6502,MOS65C02, [Excludes the MOS65C02 port])
 AC_DO_PORT(f8,       f8,     F8,       [Excludes the f8 port])
 AC_DO_PORT(f8l,      f8,     F8L,      [Excludes the f8l port])
+AC_DO_PORT(78k0,     78k0,   78K0,     [Excludes the 78K0 port])
 
 # Example for a port disabled by default, in case all the above are enabled by default:
 ####AC_DO_PORT_ENABLER(avr,   avr,   AVR,   [Includes the AVR port (disabled by default)])
@@ -917,6 +918,12 @@ if test $OPT_DISABLE_F8 = 0 || test $OPT_DISABLE_F8L = 0; then
                    sdas/asf8/Makefile])
 fi
 
+if test $OPT_DISABLE_78K0 = 0; then
+  AC_CONFIG_FILES([src/78k0/Makefile
+                   sdas/as78k0/Makefile])
+  test $OPT_DISABLE_DEVICE_LIB = 0 && AC_CONFIG_FILES([device/lib/78k0/Makefile])
+fi
+
 if test $OPT_DISABLE_F8 = 0; then
   test $OPT_DISABLE_DEVICE_LIB = 0 && AC_CONFIG_FILES([device/lib/f8/Makefile])
 fi
@@ -1025,6 +1032,7 @@ sdcc ${VERSION} is now configured for
     mos65c02            ${enable_mos65c02_port}
     f8                  ${enable_f8_port}
     f8l                 ${enable_f8l_port}
+    78k0                ${enable_78k0_port}
 
   Disable non-free lib: ${OPT_DISABLE_NON_FREE}
   Disable packihx:      ${OPT_DISABLE_PACKIHX}

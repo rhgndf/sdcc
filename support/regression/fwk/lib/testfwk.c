@@ -17,10 +17,6 @@ void T2_isr (void) __interrupt (5);
 #define MEMSPACE_BUF
 #endif
 
-extern void _putchar(char c);
-extern void _initEmu(void);
-extern void _exitEmu(void);
-
 int __numTests = 0;
 static int __numFailures = 0;
 
@@ -82,10 +78,10 @@ __printu (unsigned int n)
     }
   else
     {
-      static char MEMSPACE_BUF buf[6];
+      static char MEMSPACE_BUF buf[3*sizeof(int)];
       char MEMSPACE_BUF *p = &buf[sizeof (buf) - 1];
 
-      buf[sizeof(buf) - 1] = '\0';
+      *p = '\0';
 
       while (0 != n)
         {

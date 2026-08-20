@@ -1,8 +1,8 @@
-/*-------------------------------------------------------------------------
-;  __sdcc_atomic_maybe_rollback.c - C run-time: rollback for restartable
+;--------------------------------------------------------------------------
+;  sdcc_atomic_maybe_rollback - C run-time: rollback for restartable
 ;  sequence implementation of C11 atomics
 ;
-;  Copyright (c) 2024, Philipp Klaus Krause
+;  Copyright (C) 2024, Philipp Klaus Krause
 ;
 ;  This library is free software; you can redistribute it and/or modify it
 ;  under the terms of the GNU General Public License as published by the
@@ -25,31 +25,35 @@
 ;  be covered by the GNU General Public License. This exception does
 ;  not however invalidate any other reasons why the executable file
 ;  might be covered by the GNU General Public License.
-;------------------------------------------------------------------------*/
+;--------------------------------------------------------------------------
 
-#ifdef __SDCC_MODEL_FLAT24
+	.area HOME    (CODE)
+	.area GSINIT0 (CODE)
+	.area GSINIT1 (CODE)
+	.area GSINIT2 (CODE)
+	.area GSINIT3 (CODE)
+	.area GSINIT4 (CODE)
+	.area GSINIT5 (CODE)
+	.area GSINIT  (CODE)
+	.area GSFINAL (CODE)
+	.area CSEG    (CODE)
 
-static void dummy(void) __naked
-{
-	__asm
 	.area HOME    (CODE)
 
 ; This relies on the restartable implementations being aligned properly.
 
-___sdcc_atomic_maybe_rollback::
+sdcc_atomic_maybe_rollback::
 	push acc
 	xch  a,r0
 	mov  r0, SP
 	dec  r0
 	push psw
-	cjne @r0, #(sdcc_atomic_exchange_rollback_start >> 16), 4$
-	dec  r0
-	cjne @r0, #(sdcc_atomic_exchange_rollback_start >> 8), 4$
+	cjne @r0, #>sdcc_atomic_exchange_rollback_start, 4$
 	dec  r0
 	cjne @r0, #<sdcc_atomic_exchange_rollback_start, 0$
 0$:
 	jc   4$
-	cjne @r0, #sdcc_atomic_exchange_rollback_end, 1$
+	cjne @r0, #<sdcc_atomic_exchange_rollback_end, 1$
 1$:
 	jnc  4$
 	; we now know the interrupted routine was somewhere among the
@@ -71,9 +75,4 @@ ___sdcc_atomic_maybe_rollback::
 	xch  a,r0
 	pop  acc
 	reti
-
-	__endasm;
-}
-
-#endif
 

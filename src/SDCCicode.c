@@ -2381,7 +2381,7 @@ geniCodeDivision (operand *left, operand *right, RESULT_TYPE resultType, bool pt
       !IS_FIXED (letype) && !IS_UNSIGNED (letype) &&
       floatFromVal (OP_VALUE (right)) >= 0 &&
       ((p2 = powof2 ((TYPE_TARGET_ULONGLONG) ullFromVal (OP_VALUE (right)))) > 0) &&
-      (TARGET_Z80_LIKE || TARGET_HC08_LIKE || TARGET_MOS6502_LIKE))
+      (TARGET_Z80_LIKE || TARGET_HC08_LIKE || TARGET_MOS6502_LIKE || TARGET_78K0_LIKE))
     {
       operand *tmp;
       symbol *label = newiTempLabel (NULL);
@@ -3661,7 +3661,7 @@ geniCodeParms (ast *parms, value *argVals, int *iArg, int *stack, sym_link *ftyp
   pval = parms->opval.oprnd;
 
   /* if register parm then make it a send */
-  if (((IS_REGPARM (parms->etype) && !IFFUNC_HASVARARGS (ftype)) || IFFUNC_ISBUILTIN (ftype)) &&
+  if (((IS_REGPARM (parms->etype) && (!IFFUNC_HASVARARGS (ftype) || (TARGET_IS_78K0 && *iArg >= 0))) || IFFUNC_ISBUILTIN (ftype)) &&
     !IFFUNC_ISDYNAMICC (ftype))
     {
 send:

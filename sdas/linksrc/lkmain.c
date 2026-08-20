@@ -102,6 +102,34 @@ void Areas51 (void)
 }
 /* end sdld 8051 specific */
 
+/* The uPD78F0034 register banks and SFRs occupy 0xFEE0..0xFFFF.
+ * Ordinary allocatable RAM areas must end before them. */
+static void
+k78k0_ramcheck (void)
+{
+        const a_uint register_space_start = 0xFEE0;
+        const a_uint address_space_end = 0x10000;
+        struct area *area;
+
+        for (area = areap; area; area = area->a_ap) {
+                if (strcmp(area->a_id, "DATA") &&
+                    strcmp(area->a_id, "INITIALIZED") &&
+                    strcmp(area->a_id, "SSEG"))
+                        continue;
+                if (!area->a_size || area->a_addr >= address_space_end)
+                        continue;
+                if (area->a_addr < register_space_start &&
+                    area->a_size <= register_space_start - area->a_addr)
+                        continue;
+
+                fprintf(stderr,
+                        "?ASlink-Error-78K0 %s area at 0x%04X with size "
+                        "0x%X overlaps register space at 0xFEE0..0xFFFF\n",
+                        area->a_id, area->a_addr, area->a_size);
+                lkerr++;
+	}
+}
+
 /*)Function	int	main(argc, argv)
  *
  *		int	argc		number of command line arguments + 1
@@ -356,6 +384,9 @@ main(int argc, char *argv[])
                         else
                                 /* end sdld 8051 specific */
                                 lnkarea();
+
+                        if (TARGET_IS_78K0)
+                                k78k0_ramcheck();
 			/*
 			 * Check bank size limits.
 			 */

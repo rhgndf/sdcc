@@ -398,6 +398,9 @@ static PORT *_ports[] = {
 #if !OPT_DISABLE_F8L
   &f8l_port,
 #endif
+#if !OPT_DISABLE_78K0
+  &k78k0_port,
+#endif
 };
 
 #define NUM_PORTS (sizeof(_ports)/sizeof(_ports[0]))
@@ -2924,7 +2927,7 @@ main (int argc, char **argv, char **envp)
 #endif
           preamble = fdopen (p[1], "w");
           wassert (preamble);
-          fprintf (preamble, port->c_preamble);
+          fprintf (preamble, "%s", port->c_preamble);
           fclose (preamble);
           yyin = fdopen (p[0], "r");
           wassert (yyin);

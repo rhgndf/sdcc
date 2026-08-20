@@ -9,7 +9,9 @@
 #pragma disable_warning 85
 #endif
 
-#if !defined(__SDCC_pdk14) && !defined(__SDCC_pdk15) && !defined(__SDCC_mcs51) && !defined(__SDCC_ds390) // Lack of memory
+/* The graph-construction buffer requires at least 772 bytes of heap. */
+#if !defined(__SDCC_pdk14) && !defined(__SDCC_pdk15) && \
+	!defined(__SDCC_mcs51) && !defined(__SDCC_ds390) && !defined(__SDCC_78k0)
 extern const char stdcbench_name_version_string[];
 
 unsigned long stdcbench(void);
@@ -463,8 +465,8 @@ const char stdcbench_name_version_string[] = "stdcbench 0.6";
 void
 testBug(void)
 {
-#if !defined(__SDCC_pdk14) && !defined(__SDCC_pdk15) && !defined(__SDCC_mcs51) && !defined(__SDCC_ds390) // Lack of memory
+#if !defined(__SDCC_pdk14) && !defined(__SDCC_pdk15) && \
+	!defined(__SDCC_mcs51) && !defined(__SDCC_ds390) && !defined(__SDCC_78k0)
 	c90lib_lnlc();
 #endif
 }
-

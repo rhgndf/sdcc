@@ -383,6 +383,13 @@ extern	int	ASxxxx_VERSION;
                                  * space to bit-addressable space.
 				 */
 
+/* 78K0 direct-address relocation mode.  Keep these values in sync with
+ * as78k0/78k0.h. */
+#define R_78K0_SADDR       0x0800
+#define R_78K0_SFR         0x0A00
+#define R_78K0_EVEN        0x0100
+#define R_78K0_MODE_MASK   0x0F00
+
 #define R_ESCAPE_MASK   0xf0    /* Used to escape relocation modes
                                  * greater than 0xff in the .rel
                                  * file.
@@ -1404,4 +1411,3 @@ void gg(int in);
 /* strcmpi.h */
 extern int as_strcmpi(const char *s1, const char *s2);
 extern int as_strncmpi(const char *s1, const char *s2, size_t n);
-

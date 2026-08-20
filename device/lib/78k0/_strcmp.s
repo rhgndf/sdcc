@@ -1,7 +1,7 @@
 ;--------------------------------------------------------------------------
-;  atomic_flag_test_and_set.asm - C run-time: C11 atomic flag
+;  _strcmp.s
 ;
-;  Copyright (c) 2024, Philipp Klaus Krause
+;  Copyright (C) 2026
 ;
 ;  This library is free software; you can redistribute it and/or modify it
 ;  under the terms of the GNU General Public License as published by the
@@ -16,7 +16,7 @@
 ;  You should have received a copy of the GNU General Public License
 ;  along with this library; see the file COPYING. If not, write to the
 ;  Free Software Foundation, 51 Franklin Street, Fifth Floor, Boston,
-;   MA 02110-1301, USA.
+;  MA 02110-1301, USA.
 ;
 ;  As a special exception, if you link this library with other files,
 ;  some of which are compiled with SDCC, to produce an executable,
@@ -26,20 +26,39 @@
 ;  might be covered by the GNU General Public License.
 ;--------------------------------------------------------------------------
 
-	.area HOME    (CODE)
-	.area GSINIT0 (CODE)
-	.area GSINIT1 (CODE)
-	.area GSINIT2 (CODE)
-	.area GSINIT3 (CODE)
-	.area GSINIT4 (CODE)
-	.area GSINIT5 (CODE)
-	.area GSINIT  (CODE)
-	.area GSFINAL (CODE)
-	.area CSEG    (CODE)
+	.globl _strcmp
 
-	.area HOME    (CODE)
+	.area CODE
 
-_atomic_flag_test_and_set::
-	mov  r2, #0x01
-	ljmp sdcc_atomic_exchange_gptr_impl
+; AX = left, stack = right. Return the unsigned-byte difference in AX.
+; DE is preserved and the stacked argument is removed before returning.
+_strcmp:
+	movw	hl,ax
+	pop	bc
+	pop	ax
+	push	bc
+	push	de
+	movw	de,ax
 
+00001$:
+	mov	a,[hl]
+	mov	x,a
+	mov	a,[de]
+	cmp	a,x
+	bnz	00003$
+	cmp	a,#0x00
+	bz	00004$
+	incw	hl
+	incw	de
+	br	00001$
+
+00003$:
+	xch	a,x
+	sub	a,x
+	mov	x,a
+	mov	a,#0x00
+	subc	a,#0x00
+
+00004$:
+	pop	de
+	ret

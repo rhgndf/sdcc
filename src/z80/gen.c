@@ -10345,7 +10345,8 @@ genPlus (iCode * ic)
           i += 2;
         }
       // When adding registers the 16 bit addition results in smaller, faster code than an 8-bit addition.
-      else if ((!IS_SM83 || !started) && !maskedbyte && (!premoved || i) && i == size - 1 && isPairDead (PAIR_HL, ic) && aopInReg (IC_RESULT (ic)->aop, i, L_IDX)
+      else if ((!IS_SM83 || !started) && !maskedbyte && (!premoved || i) && i == size - 1 && isPairDead (PAIR_HL, ic) && ic->result->aop->regs[H_IDX] < 0
+        && aopInReg (ic->result->aop, i, L_IDX)
         && (aopInReg (leftop, i, L_IDX) || aopInReg (rightop, i, L_IDX))
         && (aopInReg (leftop, i, C_IDX) || aopInReg (rightop, i, C_IDX) || aopInReg (leftop, i, E_IDX) || aopInReg (rightop, i, E_IDX)))
         {
@@ -16445,7 +16446,7 @@ genUnpackBits (operand *result, int offset, int blen, int bstr)
   wassert (blen <= 8);
 
   AccRol (8 - bstr);
-  unpackMaskA (!SPEC_USIGN (etype), blen, false);
+  unpackMaskA (!SPEC_USIGN (etype) && !IS_BOOLEAN (etype), blen, false);
   cheapMove (result->aop, offset++, ASMOP_A, 0, true);
 
   if (offset < rsize)
